@@ -45,12 +45,12 @@ app.post('/api/ollama/restart', (_req, res) => {
   try {
     const platform = process.platform;
     if (platform === 'win32') {
-      try { execSync('taskkill /F /IM ollama.exe', { timeout: 5000 }); } catch {}
-      try { execSync('taskkill /F /IM llama-server.exe', { timeout: 5000 }); } catch {}
-      const ollamaPath = execSync('where ollama', { timeout: 5000 }).toString().trim().split('\n')[0];
-      execSync(`start "" "${ollamaPath}" serve`, { timeout: 5000, shell: true });
+      try { execSync('taskkill /F /IM ollama.exe', { timeout: 15000 }); } catch {}
+      try { execSync('taskkill /F /IM llama-server.exe', { timeout: 15000 }); } catch {}
+      const ollamaPath = execSync('where ollama', { timeout: 10000 }).toString().trim().split('\n')[0];
+      execSync(`start "" "${ollamaPath}" serve`, { timeout: 10000, shell: true });
     } else {
-      try { execSync('sudo systemctl restart ollama', { timeout: 10000 }); } catch {
+      try { execSync('sudo systemctl restart ollama', { timeout: 15000 }); } catch {
         try { execSync('pkill -f ollama', { timeout: 5000 }); } catch {}
         execSync('nohup ollama serve > /dev/null 2>&1 &', { timeout: 5000, shell: true });
       }
