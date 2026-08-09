@@ -49,6 +49,20 @@
     .chat-item:hover { background: var(--card2); }
     .chat-item.active { background: var(--card2); color: var(--text); border-left: 3px solid var(--y); }
     .ctx-badge { font-size: 10px; color: var(--accent); background: rgba(63,169,245,0.12); padding: 1px 6px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; flex-shrink: 0; margin-right: 4px; }
+    .chat-group { margin: 4px 0; }
+    .chat-group-header { display: flex; align-items: center; gap: 6px; padding: 6px 12px; cursor: pointer; font-size: 11px; color: var(--y); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+    .chat-group-header:hover { background: var(--card2); border-radius: 6px; }
+    .chat-group-header .group-arrow { transition: transform .2s; font-size: 10px; }
+    .chat-group-header .group-arrow.open { transform: rotate(90deg); }
+    .chat-group-header .group-actions { margin-left: auto; display: flex; gap: 2px; opacity: 0; transition: opacity .15s; }
+    .chat-group-header:hover .group-actions { opacity: 1; }
+    .chat-group-header .group-actions button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0 3px; }
+    .chat-group-header .group-actions button:hover { color: var(--text); }
+    .chat-group-body { padding-left: 8px; }
+    .chat-group-body.collapsed { display: none; }
+    .chat-item .rename-btn { display: none; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 12px; padding: 0 3px; }
+    .chat-item:hover .rename-btn { display: block; }
+    .chat-rename-input { background: var(--card2); border: 1px solid var(--y); color: var(--text); font-size: 13px; padding: 2px 6px; border-radius: 4px; width: 100%; outline: none; }
     .chat-item .delete-btn { display: none; background: none; border: none; color: var(--danger); cursor: pointer; font-size: 16px; padding: 0 4px; }
     .chat-item:hover .delete-btn { display: block; }
 
@@ -219,7 +233,10 @@
       <div class="logo">T</div>
       <h2>TITAN AGENT</h2>
     </div>
-    <button class="new-chat-btn" onclick="newChat()">+ NUEVO CHAT</button>
+    <div style="display:flex;gap:6px;margin:12px 16px">
+      <button class="new-chat-btn" style="margin:0;flex:1" onclick="newChat()">+ CHAT</button>
+      <button class="new-chat-btn" style="margin:0;flex:1;background:var(--card2);color:var(--muted);border:1px solid var(--border)" onclick="newGroup()">+ GRUPO</button>
+    </div>
     <div class="chat-list" id="chatList"></div>
 
     <!-- Metrics Panel -->
@@ -373,6 +390,7 @@
   <script>
     // State
     let chats = JSON.parse(localStorage.getItem('titan_chats') || '[]');
+    let groups = JSON.parse(localStorage.getItem('titan_groups') || '[]');
     let currentChatId = null;
     let sshConnections = JSON.parse(localStorage.getItem('titan_ssh') || '[]');
     let terminals = {};
@@ -407,12 +425,68 @@
       }
     }
 
-    function newChat() {
-      const chat = { id: Date.now().toString(), title: 'Nuevo chat', messages: [], contextTokens: 0 };
+    function newChat(groupId) {
+      const chat = { id: Date.now().toString(), title: 'Nuevo chat', messages: [], contextTokens: 0, group: groupId || null };
       chats.unshift(chat);
       saveChats();
       renderChatList();
       selectChat(chat.id);
+    }
+
+    function newGroup() {
+      const name = prompt('Nombre del grupo:');
+      if (!name) return;
+      groups.push({ id: Date.now().toString(), name, open: true });
+      localStorage.setItem('titan_groups', JSON.stringify(groups));
+      renderChatList();
+    }
+
+    function renameChat(id, e) {
+      e.stopPropagation();
+      const item = document.querySelector(`.chat-item[data-id="${id}"] .chat-title`);
+      if (!item) return;
+      const chat = chats.find(c => c.id === id);
+      const old = item.innerHTML;
+      item.innerHTML = `<input class="chat-rename-input" value="${escHtml(chat.title)}" onblur="finishRename('${id}', this)" onkeydown="if(event.key==='Enter'){this.blur()}if(event.key==='Escape'){this.value='';this.blur()}" />`;
+      item.querySelector('input').focus();
+      item.querySelector('input').select();
+    }
+
+    function finishRename(id, input) {
+      const val = input.value.trim();
+      if (val) {
+        const chat = chats.find(c => c.id === id);
+        if (chat) { chat.title = val; saveChats(); }
+      }
+      renderChatList();
+    }
+
+    function renameGroup(gid, e) {
+      e.stopPropagation();
+      const g = groups.find(x => x.id === gid);
+      if (!g) return;
+      const name = prompt('Nombre del grupo:', g.name);
+      if (name) { g.name = name; localStorage.setItem('titan_groups', JSON.stringify(groups)); renderChatList(); }
+    }
+
+    function deleteGroup(gid, e) {
+      e.stopPropagation();
+      chats.forEach(c => { if (c.group === gid) c.group = null; });
+      groups = groups.filter(x => x.id !== gid);
+      localStorage.setItem('titan_groups', JSON.stringify(groups));
+      saveChats();
+      renderChatList();
+    }
+
+    function toggleGroup(gid) {
+      const g = groups.find(x => x.id === gid);
+      if (g) { g.open = !g.open; localStorage.setItem('titan_groups', JSON.stringify(groups)); renderChatList(); }
+    }
+
+    function moveToGroup(chatId, groupId, e) {
+      e.stopPropagation();
+      const chat = chats.find(c => c.id === chatId);
+      if (chat) { chat.group = groupId; saveChats(); renderChatList(); }
     }
 
     function selectChat(id) {
@@ -433,17 +507,53 @@
       }
     }
 
+    function renderChatItem(c) {
+      const ctx = c.contextTokens || 0;
+      const ctxLabel = ctx > 1000 ? (ctx / 1000).toFixed(1) + 'k' : ctx.toString();
+      const groupOptions = groups.length > 0 ? groups.map(g =>
+        `<option value="${g.id}" ${c.group === g.id ? 'selected' : ''}>${escHtml(g.name)}</option>`
+      ).join('') : '';
+      return `<div class="chat-item ${c.id === currentChatId ? 'active' : ''}" data-id="${c.id}" onclick="selectChat('${c.id}')">
+        <span class="chat-title" style="flex:1;overflow:hidden;text-overflow:ellipsis" ondblclick="renameChat('${c.id}', event)">${escHtml(c.title)}</span>
+        ${ctx > 0 ? `<span class="ctx-badge" title="Tokens de contexto">${ctxLabel}</span>` : ''}
+        <button class="rename-btn" onclick="renameChat('${c.id}', event)" title="Renombrar">✎</button>
+        ${groups.length > 0 ? `<select class="move-select" onclick="event.stopPropagation()" onchange="moveToGroup('${c.id}', this.value, event)" title="Mover a grupo" style="width:16px;height:16px;opacity:0;position:absolute;right:28px;cursor:pointer"><option value="">Sin grupo</option>${groupOptions}</select><span class="rename-btn" style="display:block;pointer-events:none">⇄</span>` : ''}
+        <button class="delete-btn" onclick="deleteChat('${c.id}', event)">&times;</button>
+      </div>`;
+    }
+
     function renderChatList() {
       const list = document.getElementById('chatList');
-      list.innerHTML = chats.map(c => {
-        const ctx = c.contextTokens || 0;
-        const ctxLabel = ctx > 1000 ? (ctx / 1000).toFixed(1) + 'k' : ctx.toString();
-        return `<div class="chat-item ${c.id === currentChatId ? 'active' : ''}" data-id="${c.id}" onclick="selectChat('${c.id}')">
-          <span style="flex:1;overflow:hidden;text-overflow:ellipsis">${escHtml(c.title)}</span>
-          ${ctx > 0 ? `<span class="ctx-badge" title="Tokens de contexto">${ctxLabel}</span>` : ''}
-          <button class="delete-btn" onclick="deleteChat('${c.id}', event)">&times;</button>
+      let html = '';
+
+      // Render groups
+      groups.forEach(g => {
+        const groupChats = chats.filter(c => c.group === g.id);
+        const totalCtx = groupChats.reduce((sum, c) => sum + (c.contextTokens || 0), 0);
+        const ctxLabel = totalCtx > 1000 ? (totalCtx / 1000).toFixed(1) + 'k' : totalCtx.toString();
+        html += `<div class="chat-group">
+          <div class="chat-group-header" onclick="toggleGroup('${g.id}')">
+            <span class="group-arrow ${g.open ? 'open' : ''}">▶</span>
+            <span>${escHtml(g.name)}</span>
+            ${totalCtx > 0 ? `<span class="ctx-badge">${ctxLabel}</span>` : ''}
+            <span style="font-size:10px;color:var(--muted)">(${groupChats.length})</span>
+            <div class="group-actions">
+              <button onclick="newChat('${g.id}'); event.stopPropagation()" title="Nuevo chat en grupo">+</button>
+              <button onclick="renameGroup('${g.id}', event)" title="Renombrar">✎</button>
+              <button onclick="deleteGroup('${g.id}', event)" title="Eliminar grupo">&times;</button>
+            </div>
+          </div>
+          <div class="chat-group-body ${g.open ? '' : 'collapsed'}">
+            ${groupChats.map(c => renderChatItem(c)).join('')}
+          </div>
         </div>`;
-      }).join('');
+      });
+
+      // Ungrouped chats
+      const ungrouped = chats.filter(c => !c.group || !groups.find(g => g.id === c.group));
+      html += ungrouped.map(c => renderChatItem(c)).join('');
+
+      list.innerHTML = html;
     }
 
     function renderMessages() {
