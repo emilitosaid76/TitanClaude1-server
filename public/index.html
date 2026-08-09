@@ -1,0 +1,916 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TITAN AGENT</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0f1720">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css">
+  <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1720;
+      --card: #16212c;
+      --card2: #1c2b38;
+      --border: #253544;
+      --text: #e6edf3;
+      --muted: #8a9bb0;
+      --y: #FFD100;
+      --y-hover: #e6bc00;
+      --ok: #2ecc71;
+      --off: #52606d;
+      --warn: #f5a623;
+      --danger: #ef4444;
+      --accent: #3fa9f5;
+      --code-bg: #111b25;
+      --user-bubble: #1a2a3a;
+      --r: 12px;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; overflow: hidden; }
+
+    /* Sidebar */
+    .sidebar { width: 270px; background: var(--card); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
+    .sidebar-header { padding: 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+    .sidebar-header h2 { font-size: 15px; font-weight: 700; color: var(--y); letter-spacing: 1.5px; text-transform: uppercase; }
+    .sidebar-header .logo { width: 30px; height: 30px; background: var(--y); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 900; color: #000; }
+    .new-chat-btn { margin: 12px 16px; padding: 10px; background: var(--y); color: #000; border: none; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; transition: background .2s; letter-spacing: 0.5px; }
+    .new-chat-btn:hover { background: var(--y-hover); }
+    .chat-list { flex: 1; overflow-y: auto; padding: 8px; }
+    .chat-item { padding: 10px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background .15s; display: flex; align-items: center; justify-content: space-between; }
+    .chat-item:hover { background: var(--card2); }
+    .chat-item.active { background: var(--card2); color: var(--text); border-left: 3px solid var(--y); }
+    .ctx-badge { font-size: 10px; color: var(--accent); background: rgba(63,169,245,0.12); padding: 1px 6px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; flex-shrink: 0; margin-right: 4px; }
+    .chat-item .delete-btn { display: none; background: none; border: none; color: var(--danger); cursor: pointer; font-size: 16px; padding: 0 4px; }
+    .chat-item:hover .delete-btn { display: block; }
+
+    /* Metrics panel */
+    .metrics-panel { border-top: 1px solid var(--border); padding: 12px 16px; }
+    .metrics-panel h3 { font-size: 11px; color: var(--y); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; font-weight: 600; }
+    .metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .metric-card { background: var(--card2); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+    .metric-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+    .metric-value { font-size: 18px; font-weight: 700; color: var(--y); font-family: 'JetBrains Mono', monospace; }
+    .metric-value.small { font-size: 14px; }
+    .metric-sub { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+    /* SSH connections in sidebar */
+    .ssh-section { border-top: 1px solid var(--border); padding: 12px 16px; }
+    .ssh-section h3 { font-size: 11px; color: var(--y); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; font-weight: 600; }
+    .ssh-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; transition: background .15s; }
+    .ssh-item:hover { background: var(--card2); }
+    .ssh-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--off); }
+    .ssh-dot.connected { background: var(--ok); }
+    .add-ssh-btn { width: 100%; margin-top: 8px; padding: 6px; background: none; border: 1px dashed var(--border); border-radius: 6px; color: var(--muted); cursor: pointer; font-size: 12px; }
+    .add-ssh-btn:hover { border-color: var(--y); color: var(--y); }
+    .ssh-remove { cursor: pointer; color: var(--danger); opacity: 0.5; font-size: 16px; padding: 0 4px; line-height: 1; }
+    .ssh-remove:hover { opacity: 1; }
+
+    /* Model selector in sidebar */
+    .model-selector { padding: 12px 16px; border-top: 1px solid var(--border); }
+    .model-selector label { font-size: 11px; color: var(--y); text-transform: uppercase; letter-spacing: 1px; display: block; margin-bottom: 6px; font-weight: 600; }
+    .model-selector select { width: 100%; padding: 8px; background: var(--card2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
+    .model-selector select:focus { outline: none; border-color: var(--y); }
+
+    /* Main area */
+    .main { flex: 1; display: flex; flex-direction: row; min-width: 0; min-height: 0; overflow: hidden; }
+    .main-chat { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+
+    /* Tab bar */
+    .tab-bar { display: flex; background: var(--card); border-bottom: 1px solid var(--border); }
+    .tab { padding: 10px 20px; font-size: 13px; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; transition: all .15s; display: flex; align-items: center; gap: 6px; }
+    .tab:hover { color: var(--text); }
+    .tab.active { color: var(--y); border-bottom-color: var(--y); }
+    .tab .tab-close { font-size: 14px; margin-left: 4px; opacity: 0; transition: opacity .15s; }
+    .tab:hover .tab-close { opacity: 0.6; }
+
+    /* Chat panel */
+    .chat-panel { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+    .messages { flex: 1; overflow-y: auto; padding: 20px; max-width: 800px; width: 100%; margin: 0 auto; min-height: 0; }
+    .message { margin-bottom: 24px; animation: fadeIn .3s; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .message.user .msg-content { background: var(--user-bubble); padding: 12px 16px; border-radius: 16px 16px 4px 16px; display: inline-block; max-width: 85%; float: right; }
+    .message.user { text-align: right; }
+    .message.user::after { content: ''; display: block; clear: both; }
+    .message.assistant .msg-content { line-height: 1.7; }
+    .message.assistant .msg-content p { margin-bottom: 12px; }
+    .message.assistant .msg-content pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; overflow-x: auto; margin: 12px 0; position: relative; }
+    .message.assistant .msg-content code { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 13px; }
+    .message.assistant .msg-content code:not(pre code) { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+    .message .role-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+    .copy-btn { position: absolute; top: 8px; right: 8px; background: var(--card2); border: 1px solid var(--border); color: var(--muted); padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; }
+    .copy-btn:hover { color: var(--text); }
+
+    /* Exec blocks in chat */
+    .exec-block { background: var(--card); border: 1px solid var(--border); border-radius: 8px; margin: 12px 0; overflow: hidden; }
+    .exec-header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--code-bg); font-size: 12px; color: var(--muted); }
+    .exec-header .exec-icon { color: var(--ok); }
+    .exec-header .exec-host { color: var(--y); font-weight: 600; }
+    .exec-command { padding: 8px 12px; font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--warn); border-bottom: 1px solid var(--border); }
+    .exec-output { padding: 8px 12px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #ccc; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
+    .exec-running { color: var(--y); display: flex; align-items: center; gap: 6px; padding: 8px 12px; font-size: 12px; }
+    .exec-running .spinner { width: 12px; height: 12px; border: 2px solid var(--y); border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Input area */
+    .input-area { padding: 16px 20px; max-width: 800px; width: 100%; margin: 0 auto; }
+    .input-wrapper { display: flex; gap: 8px; background: var(--card); border: 1px solid var(--border); border-radius: var(--r); padding: 8px 12px; align-items: flex-end; transition: border-color .2s; }
+    .input-wrapper:focus-within { border-color: var(--y); }
+    .input-wrapper textarea { flex: 1; background: none; border: none; color: var(--text); font-size: 14px; font-family: inherit; resize: none; outline: none; max-height: 200px; line-height: 1.5; }
+    .send-btn { width: 36px; height: 36px; background: var(--y); border: none; border-radius: 8px; color: #000; cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center; transition: background .2s; flex-shrink: 0; font-weight: 700; }
+    .send-btn:hover { background: var(--y-hover); }
+    .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .send-btn.stop { background: var(--danger); }
+    .send-btn.stop:hover { background: #d63031; }
+
+    /* Slash commands */
+    .slash-menu { display: none; position: absolute; bottom: 100%; left: 0; right: 0; background: var(--card); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; overflow: hidden; box-shadow: 0 -4px 20px rgba(0,0,0,0.4); max-height: 320px; overflow-y: auto; }
+    .slash-menu.open { display: block; }
+    .slash-menu-item { display: flex; align-items: center; gap: 12px; padding: 10px 16px; cursor: pointer; transition: background .15s; }
+    .slash-menu-item:hover, .slash-menu-item.selected { background: var(--card2); }
+    .slash-menu-item .slash-icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+    .slash-menu-item .slash-info { flex: 1; min-width: 0; }
+    .slash-menu-item .slash-cmd { font-size: 13px; font-weight: 600; color: var(--y); font-family: 'JetBrains Mono', monospace; }
+    .slash-menu-item .slash-desc { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .input-area { position: relative; }
+
+    /* Live exec panel */
+    .exec-live-panel { width: 420px; background: var(--card); border-left: 1px solid var(--border); display: none; flex-direction: column; flex-shrink: 0; }
+    .exec-live-panel.open { display: flex; }
+    .exec-live-header { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+    .exec-live-header h3 { font-size: 12px; color: var(--y); text-transform: uppercase; letter-spacing: 1px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .exec-live-header .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); animation: pulse 1.5s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    .exec-live-close { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 18px; padding: 4px 8px; border-radius: 4px; }
+    .exec-live-close:hover { color: var(--text); background: var(--card2); }
+    .exec-live-body { flex: 1; overflow-y: auto; padding: 12px; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 12px; }
+    .exec-live-entry { margin-bottom: 16px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .exec-live-entry .elh { padding: 6px 10px; background: var(--code-bg); font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+    .exec-live-entry .elh .host { color: var(--y); font-weight: 600; }
+    .exec-live-entry .elcmd { padding: 6px 10px; color: var(--warn); border-bottom: 1px solid var(--border); font-size: 12px; }
+    .exec-live-entry .elout { padding: 8px 10px; color: #ccc; white-space: pre-wrap; max-height: 250px; overflow-y: auto; font-size: 11px; }
+    .exec-live-entry .elout.error { color: var(--danger); }
+    .exec-live-entry .elrunning { padding: 6px 10px; color: var(--y); font-size: 11px; display: flex; align-items: center; gap: 6px; }
+    .exec-live-entry .elrunning .spinner { width: 10px; height: 10px; border: 2px solid var(--y); border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
+
+    /* Terminal panel */
+    .terminal-panel { flex: 1; display: none; flex-direction: column; }
+    .terminal-panel.active { display: flex; }
+    .chat-panel.hidden { display: none; }
+    .terminal-header { padding: 8px 16px; background: var(--card); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; font-size: 13px; }
+    .terminal-header .status-badge { padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+    .terminal-header .status-badge.connected { background: rgba(46,204,113,0.15); color: var(--ok); }
+    .terminal-header .status-badge.disconnected { background: rgba(239,68,68,0.15); color: var(--danger); }
+    .terminal-container { flex: 1; padding: 4px; background: #0a0f14; }
+    .terminal-container .xterm { height: 100%; }
+
+    /* SSH Modal */
+    .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; align-items: center; justify-content: center; }
+    .modal-overlay.active { display: flex; }
+    .modal { background: var(--card); border: 1px solid var(--border); border-radius: var(--r); padding: 24px; width: 400px; max-width: 90%; }
+    .modal h3 { margin-bottom: 16px; font-size: 16px; color: var(--y); }
+    .modal .form-group { margin-bottom: 12px; }
+    .modal label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+    .modal input { width: 100%; padding: 8px 12px; background: var(--card2); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 14px; }
+    .modal input:focus { outline: none; border-color: var(--y); }
+    .modal .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+    .modal button { padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 13px; }
+    .modal .btn-primary { background: var(--y); color: #000; font-weight: 600; }
+    .modal .btn-primary:hover { background: var(--y-hover); }
+    .modal .btn-secondary { background: var(--card2); color: var(--text); }
+
+    /* Welcome screen */
+    .welcome { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--muted); }
+    .welcome h1 { font-size: 32px; color: var(--y); margin-bottom: 4px; font-weight: 800; letter-spacing: 2px; }
+    .welcome .subtitle { font-size: 14px; color: var(--muted); margin-bottom: 28px; }
+    .welcome .features { display: flex; gap: 16px; }
+    .welcome .feature { background: var(--card); border: 1px solid var(--border); border-radius: var(--r); padding: 20px; width: 180px; text-align: center; transition: border-color .2s; }
+    .welcome .feature:hover { border-color: var(--y); }
+    .welcome .feature .icon { font-size: 28px; margin-bottom: 10px; }
+    .welcome .feature h3 { font-size: 13px; color: var(--y); margin-bottom: 4px; font-weight: 600; }
+    .welcome .feature p { font-size: 12px; margin-bottom: 0; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--off); }
+
+    /* Thinking indicator */
+    .thinking { display: flex; gap: 4px; padding: 8px 0; }
+    .thinking span { width: 6px; height: 6px; background: var(--y); border-radius: 50%; animation: bounce 1.4s infinite; }
+    .thinking span:nth-child(2) { animation-delay: 0.2s; }
+    .thinking span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes bounce { 0%, 80%, 100% { transform: translateY(0); } 40% { transform: translateY(-8px); } }
+  </style>
+</head>
+<body>
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">T</div>
+      <h2>TITAN AGENT</h2>
+    </div>
+    <button class="new-chat-btn" onclick="newChat()">+ NUEVO CHAT</button>
+    <div class="chat-list" id="chatList"></div>
+
+    <!-- Metrics Panel -->
+    <div class="metrics-panel" id="gpuPanel">
+      <h3>GPU Server</h3>
+      <div id="gpuName" style="font-size:11px;color:var(--muted);margin-bottom:8px">Conectando...</div>
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <div class="metric-label">GPU Load</div>
+          <div class="metric-value small" id="gpuLoad">--%</div>
+          <div style="height:4px;background:var(--card2);border-radius:2px;margin-top:4px"><div id="gpuLoadBar" style="height:100%;background:var(--ok);border-radius:2px;width:0%;transition:width .5s"></div></div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">VRAM</div>
+          <div class="metric-value small" id="gpuVram">--</div>
+          <div style="height:4px;background:var(--card2);border-radius:2px;margin-top:4px"><div id="gpuVramBar" style="height:100%;background:var(--accent);border-radius:2px;width:0%;transition:width .5s"></div></div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Temp</div>
+          <div class="metric-value small" id="gpuTemp">--°C</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="metrics-panel">
+      <h3>Ultima ejecucion</h3>
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <div class="metric-label">Tiempo</div>
+          <div class="metric-value" id="metricTime">--</div>
+          <div class="metric-sub" id="metricTimeSub">sin datos</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Tokens</div>
+          <div class="metric-value" id="metricTokens">--</div>
+          <div class="metric-sub" id="metricTokensSub">sin datos</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Velocidad</div>
+          <div class="metric-value small" id="metricSpeed">--</div>
+          <div class="metric-sub">tok/s</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Comandos</div>
+          <div class="metric-value" id="metricExecs">0</div>
+          <div class="metric-sub">SSH ejecutados</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="ssh-section">
+      <h3>SSH Connections</h3>
+      <div id="sshList"></div>
+      <button class="add-ssh-btn" onclick="showSSHModal()">+ Agregar conexion</button>
+    </div>
+
+    <div class="model-selector">
+      <label>Modelo</label>
+      <select id="modelSelect"><option>Cargando...</option></select>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div class="main">
+    <div class="main-chat">
+    <div class="tab-bar" id="tabBar">
+      <div class="tab active" data-tab="chat" onclick="switchTab('chat')">Chat</div>
+    </div>
+
+    <!-- Chat -->
+    <div class="chat-panel" id="chatPanel">
+      <div class="messages" id="messages">
+        <div class="welcome">
+          <h1>TITAN AGENT</h1>
+          <p class="subtitle">IA local + SSH remoto &mdash; tu red, tu control</p>
+          <div class="features">
+            <div class="feature">
+              <div class="icon">&#x1f916;</div>
+              <h3>Chat IA</h3>
+              <p>Modelos locales via Ollama</p>
+            </div>
+            <div class="feature">
+              <div class="icon">&#x1f4bb;</div>
+              <h3>Terminal SSH</h3>
+              <p>Ejecuta en tus maquinas</p>
+            </div>
+            <div class="feature">
+              <div class="icon">&#x26a1;</div>
+              <h3>Agente</h3>
+              <p>Ejecuta comandos automaticamente</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="input-area">
+        <div class="slash-menu" id="slashMenu"></div>
+        <div class="input-wrapper">
+          <textarea id="userInput" rows="1" placeholder="Escribe tu mensaje o / para comandos" onkeydown="handleKey(event)" oninput="autoResize(this); checkSlash(this)"></textarea>
+          <button class="send-btn" id="sendBtn" onclick="sendMessage()">&#x27A4;</button>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Live Exec Panel -->
+    <div class="exec-live-panel" id="execLivePanel">
+      <div class="exec-live-header">
+        <h3><span class="live-dot"></span> Ejecucion en vivo</h3>
+        <button class="exec-live-close" onclick="closeExecPanel()">&times;</button>
+      </div>
+      <div class="exec-live-body" id="execLiveBody"></div>
+    </div>
+  </div>
+
+  <!-- SSH Modal -->
+  <div class="modal-overlay" id="sshModal">
+    <div class="modal">
+      <h3>Nueva conexion SSH</h3>
+      <div class="form-group">
+        <label>Conexion rapida</label>
+        <input id="sshQuick" placeholder="ssh admin@10.0.0.10" oninput="parseSSHQuick(this.value)" />
+      </div>
+      <hr style="border-color:var(--border);margin:4px 0" />
+      <div class="form-group">
+        <label>Nombre</label>
+        <input id="sshName" placeholder="Mi servidor" />
+      </div>
+      <div class="form-group">
+        <label>Host</label>
+        <input id="sshHost" placeholder="10.0.0.21" />
+      </div>
+      <div class="form-group">
+        <label>Puerto</label>
+        <input id="sshPort" value="22" type="number" />
+      </div>
+      <div class="form-group">
+        <label>Usuario</label>
+        <input id="sshUser" placeholder="user" />
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input id="sshPass" type="password" placeholder="Password" />
+      </div>
+      <div class="modal-actions">
+        <button class="btn-secondary" onclick="hideSSHModal()">Cancelar</button>
+        <button class="btn-primary" onclick="addSSHConnection()">Conectar</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // State
+    let chats = JSON.parse(localStorage.getItem('titan_chats') || '[]');
+    let currentChatId = null;
+    let sshConnections = JSON.parse(localStorage.getItem('titan_ssh') || '[]');
+    let terminals = {};
+    let isStreaming = false;
+    let execCount = 0;
+    let responseStartTime = 0;
+
+    // Init
+    loadModels();
+    renderChatList();
+    renderSSHList();
+    syncSSHToServer();
+    pollGPU();
+    setInterval(pollGPU, 3000);
+    if (chats.length === 0) newChat();
+    else selectChat(chats[0].id);
+
+    async function loadModels() {
+      try {
+        const resp = await fetch('/api/models');
+        const data = await resp.json();
+        const sel = document.getElementById('modelSelect');
+        sel.innerHTML = '';
+        (data.models || []).forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m.name;
+          opt.textContent = m.name;
+          sel.appendChild(opt);
+        });
+      } catch (e) {
+        document.getElementById('modelSelect').innerHTML = '<option>Error al conectar</option>';
+      }
+    }
+
+    function newChat() {
+      const chat = { id: Date.now().toString(), title: 'Nuevo chat', messages: [], contextTokens: 0 };
+      chats.unshift(chat);
+      saveChats();
+      renderChatList();
+      selectChat(chat.id);
+    }
+
+    function selectChat(id) {
+      currentChatId = id;
+      document.querySelectorAll('.chat-item').forEach(el => el.classList.toggle('active', el.dataset.id === id));
+      renderMessages();
+      switchTab('chat');
+    }
+
+    function deleteChat(id, e) {
+      e.stopPropagation();
+      chats = chats.filter(c => c.id !== id);
+      saveChats();
+      renderChatList();
+      if (currentChatId === id) {
+        if (chats.length) selectChat(chats[0].id);
+        else newChat();
+      }
+    }
+
+    function renderChatList() {
+      const list = document.getElementById('chatList');
+      list.innerHTML = chats.map(c => {
+        const ctx = c.contextTokens || 0;
+        const ctxLabel = ctx > 1000 ? (ctx / 1000).toFixed(1) + 'k' : ctx.toString();
+        return `<div class="chat-item ${c.id === currentChatId ? 'active' : ''}" data-id="${c.id}" onclick="selectChat('${c.id}')">
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis">${escHtml(c.title)}</span>
+          ${ctx > 0 ? `<span class="ctx-badge" title="Tokens de contexto">${ctxLabel}</span>` : ''}
+          <button class="delete-btn" onclick="deleteChat('${c.id}', event)">&times;</button>
+        </div>`;
+      }).join('');
+    }
+
+    function renderMessages() {
+      const chat = chats.find(c => c.id === currentChatId);
+      const el = document.getElementById('messages');
+      if (!chat || chat.messages.length === 0) {
+        el.innerHTML = `<div class="welcome"><h1>TITAN AGENT</h1><p class="subtitle">IA local + SSH remoto &mdash; tu red, tu control</p>
+          <div class="features">
+            <div class="feature"><div class="icon">&#x1f916;</div><h3>Chat IA</h3><p>Modelos locales via Ollama</p></div>
+            <div class="feature"><div class="icon">&#x1f4bb;</div><h3>Terminal SSH</h3><p>Ejecuta en tus maquinas</p></div>
+            <div class="feature"><div class="icon">&#x26a1;</div><h3>Agente</h3><p>Ejecuta comandos automaticamente</p></div>
+          </div></div>`;
+        return;
+      }
+      el.innerHTML = chat.messages.map(m =>
+        `<div class="message ${m.role}">
+          <div class="role-label">${m.role === 'user' ? 'Tu' : 'TITAN'}</div>
+          <div class="msg-content">${m.role === 'user' ? escHtml(m.content) : renderMarkdown(m.content)}</div>
+        </div>`
+      ).join('');
+      el.scrollTop = el.scrollHeight;
+      el.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
+      addCopyButtons();
+    }
+
+    function renderMarkdown(text) {
+      return marked.parse(stripExecBlocks(text), { breaks: true });
+    }
+
+    function addCopyButtons() {
+      document.querySelectorAll('.msg-content pre').forEach(pre => {
+        if (pre.querySelector('.copy-btn')) return;
+        const btn = document.createElement('button');
+        btn.className = 'copy-btn';
+        btn.textContent = 'Copiar';
+        btn.onclick = () => {
+          navigator.clipboard.writeText(pre.querySelector('code')?.textContent || pre.textContent);
+          btn.textContent = 'Copiado!';
+          setTimeout(() => btn.textContent = 'Copiar', 1500);
+        };
+        pre.appendChild(btn);
+      });
+    }
+
+    function updateMetrics(elapsed, tokens, speed, execs) {
+      const fmt = (ms) => ms >= 60000 ? (ms / 60000).toFixed(1) + 'm' : (ms / 1000).toFixed(1) + 's';
+      document.getElementById('metricTime').textContent = fmt(elapsed);
+      document.getElementById('metricTimeSub').textContent = 'total respuesta';
+      document.getElementById('metricTokens').textContent = tokens.toLocaleString();
+      document.getElementById('metricTokensSub').textContent = 'generados';
+      document.getElementById('metricSpeed').textContent = speed.toFixed(1);
+      document.getElementById('metricExecs').textContent = execs;
+    }
+
+    async function sendMessage() {
+      const input = document.getElementById('userInput');
+      const text = input.value.trim();
+      if (!text || isStreaming) return;
+
+      const chat = chats.find(c => c.id === currentChatId);
+      chat.messages.push({ role: 'user', content: text });
+      if (chat.messages.length === 1) {
+        chat.title = text.slice(0, 40) + (text.length > 40 ? '...' : '');
+        renderChatList();
+      }
+      input.value = '';
+      autoResize(input);
+      renderMessages();
+
+      isStreaming = true;
+      execCount = 0;
+      responseStartTime = Date.now();
+      const sendBtn = document.getElementById('sendBtn');
+      sendBtn.innerHTML = '&#x25A0;';
+      sendBtn.classList.add('stop');
+      sendBtn.onclick = () => stopStreaming();
+      let abortController = new AbortController();
+      currentAbort = abortController;
+
+      const messagesEl = document.getElementById('messages');
+      const assistantDiv = document.createElement('div');
+      assistantDiv.className = 'message assistant';
+      assistantDiv.innerHTML = '<div class="role-label">TITAN</div><div class="msg-content"><div class="thinking"><span></span><span></span><span></span></div></div>';
+      messagesEl.appendChild(assistantDiv);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+
+      let fullText = '';
+      let totalTokens = 0;
+      let currentLiveEntry = null;
+      clearExecPanel();
+      const contentEl = assistantDiv.querySelector('.msg-content');
+
+      try {
+        const model = document.getElementById('modelSelect').value;
+        const apiMessages = chat.messages.map(m => ({ role: m.role, content: m.content }));
+        const resp = await fetch('/api/agent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model, messages: apiMessages, sshConnections }),
+          signal: abortController.signal,
+        });
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split('\n');
+          buf = lines.pop();
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const data = line.slice(6);
+            if (data === '[DONE]') continue;
+            try {
+              const evt = JSON.parse(data);
+              if (evt.type === 'text') {
+                fullText += evt.content;
+                totalTokens++;
+                const elapsed = Date.now() - responseStartTime;
+                const speed = totalTokens / (elapsed / 1000);
+                updateMetrics(elapsed, totalTokens, speed, execCount);
+                contentEl.innerHTML = renderMarkdown(fullText);
+                messagesEl.scrollTop = messagesEl.scrollHeight;
+              } else if (evt.type === 'exec_start') {
+                execCount++;
+                updateMetrics(Date.now() - responseStartTime, totalTokens, totalTokens / ((Date.now() - responseStartTime) / 1000), execCount);
+                const execEl = document.createElement('div');
+                execEl.className = 'exec-block';
+                execEl.id = 'exec-' + Date.now();
+                execEl.innerHTML = `
+                  <div class="exec-header"><span class="exec-icon">&#9654;</span> Ejecutando en <span class="exec-host">${escHtml(evt.host)}</span></div>
+                  <div class="exec-command">$ ${escHtml(evt.command)}</div>
+                  <div class="exec-running"><div class="spinner"></div> Ejecutando...</div>`;
+                contentEl.appendChild(execEl);
+                messagesEl.scrollTop = messagesEl.scrollHeight;
+                currentLiveEntry = addExecEntry(evt.host, evt.command);
+              } else if (evt.type === 'exec_result') {
+                const lastExec = contentEl.querySelector('.exec-block:last-of-type');
+                if (lastExec) {
+                  const running = lastExec.querySelector('.exec-running');
+                  if (running) running.remove();
+                  const outEl = document.createElement('div');
+                  outEl.className = 'exec-output';
+                  outEl.textContent = evt.output;
+                  lastExec.appendChild(outEl);
+                }
+                messagesEl.scrollTop = messagesEl.scrollHeight;
+                resolveExecEntry(currentLiveEntry, evt.output, false);
+                currentLiveEntry = null;
+              } else if (evt.type === 'exec_error') {
+                const lastExec = contentEl.querySelector('.exec-block:last-of-type');
+                if (lastExec) {
+                  const running = lastExec.querySelector('.exec-running');
+                  if (running) running.remove();
+                  const outEl = document.createElement('div');
+                  outEl.className = 'exec-output';
+                  outEl.style.color = 'var(--danger)';
+                  outEl.textContent = evt.error;
+                  lastExec.appendChild(outEl);
+                }
+                resolveExecEntry(currentLiveEntry, evt.error, true);
+                currentLiveEntry = null;
+              } else if (evt.type === 'context') {
+                chat.contextTokens = (chat.contextTokens || 0) + (evt.promptTokens || 0) + (evt.evalTokens || 0);
+                renderChatList();
+              }
+            } catch {}
+          }
+        }
+      } catch (e) {
+        if (e.name === 'AbortError') {
+          if (!fullText) fullText = '(Detenido)';
+        } else {
+          fullText = 'Error: No se pudo conectar con Ollama. ' + e.message;
+          contentEl.innerHTML = `<p style="color:var(--danger)">${escHtml(fullText)}</p>`;
+        }
+      }
+      currentAbort = null;
+
+      const finalElapsed = Date.now() - responseStartTime;
+      const finalSpeed = totalTokens / (finalElapsed / 1000) || 0;
+      updateMetrics(finalElapsed, totalTokens, finalSpeed, execCount);
+
+      chat.messages.push({ role: 'assistant', content: fullText });
+      saveChats();
+      isStreaming = false;
+      sendBtn.innerHTML = '&#x27A4;';
+      sendBtn.classList.remove('stop');
+      sendBtn.onclick = () => sendMessage();
+      contentEl.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
+      addCopyButtons();
+    }
+
+    function stripExecBlocks(text) {
+      return text.replace(/```exec\s*\n[\s\S]*?```/g, '');
+    }
+
+    // SSH
+    function showSSHModal() { document.getElementById('sshModal').classList.add('active'); document.getElementById('sshQuick').value = ''; }
+    function hideSSHModal() { document.getElementById('sshModal').classList.remove('active'); }
+
+    function parseSSHQuick(val) {
+      const cleaned = val.trim().replace(/^ssh\s+/, '');
+      if (cleaned.includes('@')) {
+        const [user, hostPart] = cleaned.split('@', 2);
+        document.getElementById('sshUser').value = user;
+        if (hostPart.includes(':')) {
+          document.getElementById('sshHost').value = hostPart.split(':')[0];
+          document.getElementById('sshPort').value = hostPart.split(':')[1];
+        } else {
+          document.getElementById('sshHost').value = hostPart;
+        }
+        document.getElementById('sshName').value = user + '@' + hostPart.split(':')[0];
+      }
+    }
+
+    function addSSHConnection() {
+      const conn = {
+        id: Date.now().toString(),
+        name: document.getElementById('sshName').value || 'Server',
+        host: document.getElementById('sshHost').value,
+        port: parseInt(document.getElementById('sshPort').value) || 22,
+        username: document.getElementById('sshUser').value,
+        password: document.getElementById('sshPass').value,
+        connected: false,
+      };
+      sshConnections.push(conn);
+      localStorage.setItem('titan_ssh', JSON.stringify(sshConnections));
+      syncSSHToServer();
+      hideSSHModal();
+      renderSSHList();
+      openTerminal(conn);
+    }
+
+    function removeSSH(id) {
+      const tabId = 'ssh-' + id;
+      if (terminals[tabId]) { terminals[tabId].ws.close(); terminals[tabId].term.dispose(); delete terminals[tabId]; document.querySelector(`[data-tab="${tabId}"]`)?.remove(); document.getElementById('panel-' + tabId)?.remove(); }
+      sshConnections = sshConnections.filter(c => c.id !== id);
+      localStorage.setItem('titan_ssh', JSON.stringify(sshConnections));
+      syncSSHToServer();
+      renderSSHList();
+      if (document.querySelector('.tab.active')?.dataset.tab === tabId) switchTab('chat');
+    }
+
+    function syncSSHToServer() {
+      fetch('/api/ssh/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connections: sshConnections }),
+      }).catch(() => {});
+    }
+
+    function renderSSHList() {
+      const list = document.getElementById('sshList');
+      list.innerHTML = sshConnections.map(c =>
+        `<div class="ssh-item">
+          <span class="ssh-dot ${c.connected ? 'connected' : ''}" onclick="openTerminal(sshConnections.find(x=>x.id==='${c.id}'))"></span>
+          <span style="flex:1;cursor:pointer" onclick="openTerminal(sshConnections.find(x=>x.id==='${c.id}'))">${escHtml(c.name)} (${escHtml(c.host)})</span>
+          <span class="ssh-remove" onclick="event.stopPropagation();removeSSH('${c.id}')" title="Desconectar">&times;</span>
+        </div>`
+      ).join('');
+    }
+
+    function openTerminal(conn) {
+      const tabId = 'ssh-' + conn.id;
+      if (terminals[tabId]) { switchTab(tabId); return; }
+
+      const tabBar = document.getElementById('tabBar');
+      const tab = document.createElement('div');
+      tab.className = 'tab';
+      tab.dataset.tab = tabId;
+      tab.innerHTML = `<span>${escHtml(conn.name)}</span><span class="tab-close" onclick="event.stopPropagation();closeTerminal('${tabId}','${conn.id}')">&times;</span>`;
+      tab.onclick = () => switchTab(tabId);
+      tabBar.appendChild(tab);
+
+      const panel = document.createElement('div');
+      panel.className = 'terminal-panel';
+      panel.id = 'panel-' + tabId;
+      panel.innerHTML = `
+        <div class="terminal-header">
+          <span>${escHtml(conn.name)} - ${escHtml(conn.username)}@${escHtml(conn.host)}</span>
+          <span class="status-badge disconnected" id="status-${tabId}">Conectando...</span>
+        </div>
+        <div class="terminal-container" id="term-${tabId}"></div>`;
+      document.querySelector('.main').appendChild(panel);
+
+      const term = new Terminal({ cursorBlink: true, fontSize: 14, fontFamily: "'JetBrains Mono', 'Fira Code', monospace", theme: { background: '#0a0f14' } });
+      const fitAddon = new FitAddon.FitAddon();
+      term.loadAddon(fitAddon);
+      term.open(document.getElementById('term-' + tabId));
+      fitAddon.fit();
+
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      const ws = new WebSocket(`${proto}://${location.host}/ws/ssh`);
+
+      ws.onopen = () => {
+        ws.send(JSON.stringify({
+          type: 'connect', host: conn.host, port: conn.port,
+          username: conn.username, password: conn.password,
+          cols: term.cols, rows: term.rows,
+        }));
+      };
+
+      ws.onmessage = (ev) => {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'data') {
+          term.write(Uint8Array.from(atob(msg.data), c => c.charCodeAt(0)));
+        } else if (msg.type === 'status') {
+          const badge = document.getElementById('status-' + tabId);
+          if (msg.text === 'connected') {
+            badge.textContent = 'Conectado';
+            badge.className = 'status-badge connected';
+            conn.connected = true; renderSSHList();
+          } else {
+            badge.textContent = 'Desconectado';
+            badge.className = 'status-badge disconnected';
+            conn.connected = false; renderSSHList();
+          }
+        } else if (msg.type === 'error') {
+          term.write('\r\n\x1b[31mError: ' + msg.text + '\x1b[0m\r\n');
+        }
+      };
+
+      term.onData(data => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'input', data: btoa(data) }));
+      });
+      term.onResize(({ cols, rows }) => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+      });
+      window.addEventListener('resize', () => fitAddon.fit());
+
+      terminals[tabId] = { term, ws, fitAddon, conn };
+      switchTab(tabId);
+    }
+
+    function closeTerminal(tabId, connId) {
+      if (terminals[tabId]) { terminals[tabId].ws.close(); terminals[tabId].term.dispose(); delete terminals[tabId]; }
+      const conn = sshConnections.find(c => c.id === connId);
+      if (conn) conn.connected = false;
+      renderSSHList();
+      document.querySelector(`[data-tab="${tabId}"]`)?.remove();
+      document.getElementById('panel-' + tabId)?.remove();
+      switchTab('chat');
+    }
+
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tabId));
+      document.getElementById('chatPanel').classList.toggle('hidden', tabId !== 'chat');
+      document.querySelectorAll('.terminal-panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + tabId));
+      if (terminals[tabId]) setTimeout(() => terminals[tabId].fitAddon.fit(), 50);
+    }
+
+    // Utils
+    // Slash commands
+    const slashCommands = [
+      { cmd: '/ssh', icon: '🖥️', bg: 'var(--ok)', desc: 'Conectar a un servidor SSH', action: () => { document.getElementById('userInput').value = ''; hideSlashMenu(); showSSHModal(); } },
+      { cmd: '/models', icon: '🤖', bg: 'var(--accent)', desc: 'Cambiar modelo de IA', action: () => { document.getElementById('userInput').value = ''; hideSlashMenu(); document.getElementById('modelSelect').focus(); } },
+      { cmd: '/clear', icon: '🗑️', bg: 'var(--danger)', desc: 'Limpiar el chat actual', action: () => { const chat = chats.find(c => c.id === currentChatId); if (chat) { chat.messages = []; chat.contextTokens = 0; saveChats(); renderMessages(); renderChatList(); } document.getElementById('userInput').value = ''; hideSlashMenu(); } },
+      { cmd: '/new', icon: '✨', bg: 'var(--y)', desc: 'Crear un nuevo chat', action: () => { document.getElementById('userInput').value = ''; hideSlashMenu(); newChat(); } },
+      { cmd: '/exec', icon: '⚡', bg: 'var(--warn)', desc: 'Ejecutar comando en un host SSH', action: () => { document.getElementById('userInput').value = '/exec '; hideSlashMenu(); } },
+      { cmd: '/status', icon: '📊', bg: 'var(--accent)', desc: 'Ver estado de GPU y servidor', action: () => { document.getElementById('userInput').value = ''; hideSlashMenu(); pollGPU(); } },
+      { cmd: '/help', icon: '❓', bg: 'var(--muted)', desc: 'Mostrar ayuda y comandos disponibles', action: () => { const helpText = 'Comandos disponibles:\\n' + slashCommands.map(c => c.cmd + ' - ' + c.desc).join('\\n'); document.getElementById('userInput').value = ''; hideSlashMenu(); const chat = chats.find(c => c.id === currentChatId); if (chat) { chat.messages.push({ role: 'assistant', content: helpText }); saveChats(); renderMessages(); } } },
+    ];
+    let slashSelectedIdx = 0;
+    let slashFiltered = [];
+
+    function checkSlash(el) {
+      const val = el.value;
+      if (val.startsWith('/')) {
+        const query = val.toLowerCase();
+        slashFiltered = slashCommands.filter(c => c.cmd.startsWith(query));
+        if (slashFiltered.length > 0) {
+          slashSelectedIdx = 0;
+          renderSlashMenu();
+          document.getElementById('slashMenu').classList.add('open');
+          return;
+        }
+      }
+      hideSlashMenu();
+    }
+
+    function renderSlashMenu() {
+      const menu = document.getElementById('slashMenu');
+      menu.innerHTML = slashFiltered.map((c, i) =>
+        `<div class="slash-menu-item ${i === slashSelectedIdx ? 'selected' : ''}" onmouseenter="slashSelectedIdx=${i};renderSlashMenu()" onclick="slashFiltered[${i}].action()">
+          <div class="slash-icon" style="background:${c.bg}">${c.icon}</div>
+          <div class="slash-info">
+            <div class="slash-cmd">${c.cmd}</div>
+            <div class="slash-desc">${c.desc}</div>
+          </div>
+        </div>`
+      ).join('');
+    }
+
+    function hideSlashMenu() {
+      document.getElementById('slashMenu').classList.remove('open');
+    }
+
+    async function pollGPU() {
+      try {
+        const r = await fetch('/api/gpu');
+        const d = await r.json();
+        if (d.error) return;
+        document.getElementById('gpuName').textContent = d.name;
+        document.getElementById('gpuLoad').textContent = d.gpuLoad + '%';
+        document.getElementById('gpuLoadBar').style.width = d.gpuLoad + '%';
+        document.getElementById('gpuLoadBar').style.background = d.gpuLoad > 80 ? 'var(--danger)' : d.gpuLoad > 50 ? 'var(--warn)' : 'var(--ok)';
+        const vramGB = (d.vramUsed / 1024).toFixed(1);
+        const vramTotalGB = (d.vramTotal / 1024).toFixed(1);
+        const vramPct = (d.vramUsed / d.vramTotal * 100).toFixed(0);
+        document.getElementById('gpuVram').textContent = vramGB + '/' + vramTotalGB + ' GB';
+        document.getElementById('gpuVramBar').style.width = vramPct + '%';
+        document.getElementById('gpuTemp').textContent = d.temp + '°C';
+      } catch {}
+    }
+
+    let currentAbort = null;
+    function stopStreaming() { if (currentAbort) { currentAbort.abort(); currentAbort = null; } }
+
+    // Live exec panel
+    function openExecPanel() { document.getElementById('execLivePanel').classList.add('open'); }
+    function closeExecPanel() { document.getElementById('execLivePanel').classList.remove('open'); }
+    function clearExecPanel() { document.getElementById('execLiveBody').innerHTML = ''; }
+    function addExecEntry(host, command) {
+      openExecPanel();
+      const body = document.getElementById('execLiveBody');
+      const entry = document.createElement('div');
+      entry.className = 'exec-live-entry';
+      entry.id = 'exec-live-' + Date.now();
+      entry.innerHTML = `<div class="elh"><span style="color:var(--ok)">&#9654;</span> <span class="host">${escHtml(host)}</span></div><div class="elcmd">$ ${escHtml(command)}</div><div class="elrunning"><div class="spinner"></div> Ejecutando...</div>`;
+      body.appendChild(entry);
+      body.scrollTop = body.scrollHeight;
+      return entry;
+    }
+    function resolveExecEntry(entry, output, isError) {
+      if (!entry) return;
+      const running = entry.querySelector('.elrunning');
+      if (running) running.remove();
+      const out = document.createElement('div');
+      out.className = 'elout' + (isError ? ' error' : '');
+      out.textContent = output || '(sin salida)';
+      entry.appendChild(out);
+      const body = document.getElementById('execLiveBody');
+      body.scrollTop = body.scrollHeight;
+    }
+    function handleKey(e) {
+      const menuOpen = document.getElementById('slashMenu').classList.contains('open');
+      if (menuOpen) {
+        if (e.key === 'ArrowDown') { e.preventDefault(); slashSelectedIdx = Math.min(slashSelectedIdx + 1, slashFiltered.length - 1); renderSlashMenu(); return; }
+        if (e.key === 'ArrowUp') { e.preventDefault(); slashSelectedIdx = Math.max(slashSelectedIdx - 1, 0); renderSlashMenu(); return; }
+        if (e.key === 'Enter') { e.preventDefault(); if (slashFiltered[slashSelectedIdx]) slashFiltered[slashSelectedIdx].action(); return; }
+        if (e.key === 'Escape') { e.preventDefault(); hideSlashMenu(); return; }
+        if (e.key === 'Tab') { e.preventDefault(); if (slashFiltered[slashSelectedIdx]) { document.getElementById('userInput').value = slashFiltered[slashSelectedIdx].cmd + ' '; hideSlashMenu(); } return; }
+      }
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (isStreaming) stopStreaming(); else sendMessage(); }
+      if (e.key === 'Escape') hideSlashMenu();
+    }
+    function autoResize(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px'; }
+    function saveChats() { localStorage.setItem('titan_chats', JSON.stringify(chats)); }
+    function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+    // PWA
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+  </script>
+</body>
+</html>
