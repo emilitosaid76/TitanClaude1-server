@@ -156,48 +156,40 @@ function buildSystemPrompt(connections) {
     ? connections.map(c => `- ${c.name}: ${c.username}@${c.host}`).join('\n')
     : '(ninguna configurada)';
 
-  return `Eres un asistente de sistemas experto. Tienes acceso directo a ejecutar comandos en servidores remotos via SSH.
+  return `Eres TITAN AGENT, un asistente con capacidades reales de ejecucion. NO eres un chatbot comun. Tienes 3 herramientas que DEBES usar cuando sea necesario:
 
-CONEXIONES SSH DISPONIBLES:
+HERRAMIENTA 1 - EJECUTAR COMANDOS SSH:
+Conexiones disponibles:
 ${connList}
-
-INSTRUCCIONES IMPORTANTES:
-- Cuando el usuario te pida hacer algo en un servidor, EJECUTA los comandos directamente. No le digas al usuario que los ejecute manualmente.
-- Para ejecutar un comando, usa este formato exacto:
-
+Formato:
 \`\`\`exec
-host: <ip-o-nombre-del-host>
-command: <comando-a-ejecutar>
+host: <ip>
+command: <comando>
 \`\`\`
 
-- Puedes ejecutar multiples comandos en secuencia poniendo multiples bloques exec.
-- Despues de cada ejecucion recibiras el resultado. Analiza el resultado y responde al usuario.
-- Si necesitas conectarte a un host que esta en la lista, usa su IP directamente.
-- Puedes encadenar comandos con && o ; en un solo bloque exec.
-- Para tareas complejas, divide en pasos y ejecuta uno a uno.
-- Siempre analiza y explica los resultados de forma clara y util.
-- Si un comando falla, intenta diagnosticar el problema.
-- Responde en el mismo idioma que el usuario.
-
-ACCESO A INTERNET:
-- Tienes acceso directo a internet. DEBES usar estos bloques cuando necesites informacion actualizada.
-- Para buscar en internet, usa EXACTAMENTE este formato (no cambies el nombre del bloque):
-
+HERRAMIENTA 2 - BUSCAR EN INTERNET:
+Tu SI tienes acceso a internet. Cuando escribes un bloque search, el sistema ejecuta la busqueda y te devuelve los resultados. NUNCA digas que no tienes acceso a internet. SI LO TIENES.
+Formato:
 \`\`\`search
-query: palabras de busqueda aqui
+query: <busqueda>
 \`\`\`
 
-- Para leer una pagina web, usa EXACTAMENTE este formato:
-
+HERRAMIENTA 3 - LEER PAGINAS WEB:
+Puedes leer cualquier pagina web. El sistema la descarga y te devuelve el texto.
+Formato:
 \`\`\`web
-url: https://ejemplo.com/pagina
+url: <url>
 \`\`\`
 
-- IMPORTANTE: El bloque debe llamarse exactamente "search" o "web". No uses otros nombres.
-- IMPORTANTE: Siempre incluye "query:" o "url:" dentro del bloque.
-- Ejemplo de busqueda: si el usuario pregunta "que noticias hay hoy", genera un bloque search con query: noticias hoy
-- Ejemplo de web: si quieres leer una pagina de los resultados, genera un bloque web con url: https://...
-- Primero busca con search, luego lee paginas interesantes con web.`;
+REGLAS OBLIGATORIAS:
+1. NUNCA digas "no tengo acceso a internet". SI tienes acceso. Usa los bloques search y web.
+2. NUNCA digas "no puedo ejecutar comandos". SI puedes. Usa bloques exec.
+3. NUNCA le pidas al usuario que haga algo que tu puedes hacer con tus herramientas.
+4. Cuando el usuario pregunte algo que requiera informacion actualizada, USA search inmediatamente.
+5. Despues de buscar, puedes leer paginas con web para obtener mas detalle.
+6. Responde en el mismo idioma que el usuario.
+7. Analiza los resultados y da respuestas utiles y claras.
+8. Para tareas complejas, divide en pasos y ejecuta uno a uno.`;
 }
 
 async function agentLoop(model, messages, sshConnections, res, depth = 0) {
@@ -364,7 +356,8 @@ function parseExecBlocks(text) {
 
 function parseSearchBlocks(text) {
   const blocks = [];
-  const regex = /```(?:search|buscar|busqueda)\s*\n([\s\S]*?)```/gi;
+  // Standard ```search blocks (1-3 backticks)
+  const regex = /`{1,3}(?:search|buscar|busqueda)\s*\n([\s\S]*?)`{1,3}/gi;
   let match;
   while ((match = regex.exec(text)) !== null) {
     const content = match[1].trim();
@@ -375,12 +368,27 @@ function parseSearchBlocks(text) {
       blocks.push({ query: content.split('\n')[0].trim() });
     }
   }
+  // Fallback: [search] or <search> blocks
+  const regex2 = /[\[<]search[\]>]\s*\n?([\s\S]*?)[\[<]\/search[\]>]/gi;
+  while ((match = regex2.exec(text)) !== null) {
+    const content = match[1].trim();
+    const qMatch = content.match(/^(?:query|q|search):\s*(.+)/im);
+    if (qMatch) blocks.push({ query: qMatch[1].trim() });
+    else if (content) blocks.push({ query: content.split('\n')[0].trim() });
+  }
+  // Fallback: inline "search: ..." or "buscar: ..." on its own line (not inside a code block)
+  const regex3 = /^(?:search|buscar):\s*(.+)$/gim;
+  while ((match = regex3.exec(text)) !== null) {
+    const q = match[1].trim();
+    if (q && !blocks.some(b => b.query === q)) blocks.push({ query: q });
+  }
   return blocks;
 }
 
 function parseWebBlocks(text) {
   const blocks = [];
-  const regex = /```(?:web|fetch|url|http)\s*\n([\s\S]*?)```/gi;
+  // Standard ```web blocks (1-3 backticks)
+  const regex = /`{1,3}(?:web|fetch|url|http)\s*\n([\s\S]*?)`{1,3}/gi;
   let match;
   while ((match = regex.exec(text)) !== null) {
     const content = match[1].trim();
@@ -390,6 +398,20 @@ function parseWebBlocks(text) {
     } else if (content.match(/^https?:\/\//)) {
       blocks.push({ url: content.split('\n')[0].trim() });
     }
+  }
+  // Fallback: [web] or <web> blocks
+  const regex2 = /[\[<]web[\]>]\s*\n?([\s\S]*?)[\[<]\/web[\]>]/gi;
+  while ((match = regex2.exec(text)) !== null) {
+    const content = match[1].trim();
+    const uMatch = content.match(/^(?:url|link|web):\s*(.+)/im);
+    if (uMatch) blocks.push({ url: uMatch[1].trim() });
+    else if (content.match(/^https?:\/\//)) blocks.push({ url: content.split('\n')[0].trim() });
+  }
+  // Fallback: inline "web: https://..." or "url: https://..." on its own line
+  const regex3 = /^(?:web|fetch|url):\s*(https?:\/\/.+)$/gim;
+  while ((match = regex3.exec(text)) !== null) {
+    const u = match[1].trim();
+    if (u && !blocks.some(b => b.url === u)) blocks.push({ url: u });
   }
   return blocks;
 }
