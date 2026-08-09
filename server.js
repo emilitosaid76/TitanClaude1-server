@@ -180,19 +180,24 @@ command: <comando-a-ejecutar>
 - Responde en el mismo idioma que el usuario.
 
 ACCESO A INTERNET:
-- Puedes buscar en la web y consultar paginas. Usa estos formatos:
+- Tienes acceso directo a internet. DEBES usar estos bloques cuando necesites informacion actualizada.
+- Para buscar en internet, usa EXACTAMENTE este formato (no cambies el nombre del bloque):
 
 \`\`\`search
-query: <tu busqueda>
+query: palabras de busqueda aqui
 \`\`\`
+
+- Para leer una pagina web, usa EXACTAMENTE este formato:
 
 \`\`\`web
-url: <url-a-consultar>
+url: https://ejemplo.com/pagina
 \`\`\`
 
-- Usa search para buscar informacion actualizada en internet.
-- Usa web para leer el contenido de una pagina especifica.
-- Combina busqueda + lectura para dar respuestas basadas en informacion actual.`;
+- IMPORTANTE: El bloque debe llamarse exactamente "search" o "web". No uses otros nombres.
+- IMPORTANTE: Siempre incluye "query:" o "url:" dentro del bloque.
+- Ejemplo de busqueda: si el usuario pregunta "que noticias hay hoy", genera un bloque search con query: noticias hoy
+- Ejemplo de web: si quieres leer una pagina de los resultados, genera un bloque web con url: https://...
+- Primero busca con search, luego lee paginas interesantes con web.`;
 }
 
 async function agentLoop(model, messages, sshConnections, res, depth = 0) {
@@ -359,24 +364,32 @@ function parseExecBlocks(text) {
 
 function parseSearchBlocks(text) {
   const blocks = [];
-  const regex = /```search\s*\n([\s\S]*?)```/g;
+  const regex = /```(?:search|buscar|busqueda)\s*\n([\s\S]*?)```/gi;
   let match;
   while ((match = regex.exec(text)) !== null) {
     const content = match[1].trim();
-    const qMatch = content.match(/^query:\s*(.+)/im);
-    if (qMatch) blocks.push({ query: qMatch[1].trim() });
+    const qMatch = content.match(/^(?:query|buscar|busqueda|q|search):\s*(.+)/im);
+    if (qMatch) {
+      blocks.push({ query: qMatch[1].trim() });
+    } else if (content && !content.includes(':')) {
+      blocks.push({ query: content.split('\n')[0].trim() });
+    }
   }
   return blocks;
 }
 
 function parseWebBlocks(text) {
   const blocks = [];
-  const regex = /```web\s*\n([\s\S]*?)```/g;
+  const regex = /```(?:web|fetch|url|http)\s*\n([\s\S]*?)```/gi;
   let match;
   while ((match = regex.exec(text)) !== null) {
     const content = match[1].trim();
-    const uMatch = content.match(/^url:\s*(.+)/im);
-    if (uMatch) blocks.push({ url: uMatch[1].trim() });
+    const uMatch = content.match(/^(?:url|link|page|pagina|web|fetch):\s*(.+)/im);
+    if (uMatch) {
+      blocks.push({ url: uMatch[1].trim() });
+    } else if (content.match(/^https?:\/\//)) {
+      blocks.push({ url: content.split('\n')[0].trim() });
+    }
   }
   return blocks;
 }
