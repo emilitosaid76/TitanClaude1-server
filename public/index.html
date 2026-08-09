@@ -241,7 +241,10 @@
 
     <!-- Metrics Panel -->
     <div class="metrics-panel" id="gpuPanel">
-      <h3>GPU Server</h3>
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h3 style="margin:0">GPU Server</h3>
+        <button onclick="restartOllama()" title="Reiniciar Ollama" style="background:none;border:1px solid var(--border);color:var(--warn);cursor:pointer;border-radius:6px;padding:2px 8px;font-size:11px;transition:all .2s" onmouseover="this.style.background='var(--warn)';this.style.color='#000'" onmouseout="this.style.background='none';this.style.color='var(--warn)'">⟳ Ollama</button>
+      </div>
       <div id="gpuName" style="font-size:11px;color:var(--muted);margin-bottom:8px">Conectando...</div>
       <div class="metrics-grid">
         <div class="metric-card">
@@ -972,6 +975,16 @@
         document.getElementById('gpuVramBar').style.width = vramPct + '%';
         document.getElementById('gpuTemp').textContent = d.temp + '°C';
       } catch {}
+    }
+
+    async function restartOllama() {
+      if (!confirm('¿Reiniciar Ollama?')) return;
+      try {
+        const r = await fetch('/api/ollama/restart', { method: 'POST' });
+        const d = await r.json();
+        if (d.ok) { alert('Ollama reiniciado'); loadModels(); }
+        else alert('Error: ' + d.error);
+      } catch (e) { alert('Error: ' + e.message); }
     }
 
     let currentAbort = null;
