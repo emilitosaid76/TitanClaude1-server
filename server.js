@@ -249,7 +249,7 @@ REGLAS OBLIGATORIAS:
 }
 
 async function agentLoop(model, messages, sshConnections, res, depth = 0) {
-  if (depth > 100) {
+  if (depth > 10) {
     res.write(`data: ${JSON.stringify({ type: 'text', content: '\n\n*Se alcanzó el límite de ejecuciones automáticas.*' })}\n\n`);
     return;
   }
