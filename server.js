@@ -3,7 +3,18 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 const { Client } = require('ssh2');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 const { execSync } = require('child_process');
+
+function getDefaultPrivateKey() {
+  const keyNames = ['id_ed25519', 'id_rsa', 'id_ecdsa'];
+  for (const name of keyNames) {
+    const keyPath = path.join(os.homedir(), '.ssh', name);
+    try { return fs.readFileSync(keyPath, 'utf8'); } catch {}
+  }
+  return undefined;
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -88,7 +99,10 @@ app.post('/api/exec', async (req, res) => {
     res.json({ output: '', error: timedOut ? 'Command timed out (30s)' : err.message });
   });
 
-  conn.connect({ host, port: port || 22, username, password });
+  const execOpts = { host, port: port || 22, username };
+  if (password) execOpts.password = password;
+  else execOpts.privateKey = getDefaultPrivateKey();
+  conn.connect(execOpts);
 });
 
 // Agentic chat: streams response, detects exec blocks, runs them, feeds results back
@@ -453,12 +467,14 @@ function executeSSH(conn, command) {
       resolve({ output: '', error: timedOut ? 'Timeout (30s)' : err.message });
     });
 
-    client.connect({
+    const connOpts = {
       host: conn.host,
       port: conn.port || 22,
       username: conn.username,
-      password: conn.password,
-    });
+    };
+    if (conn.password) connOpts.password = conn.password;
+    else connOpts.privateKey = getDefaultPrivateKey();
+    client.connect(connOpts);
   });
 }
 
@@ -497,13 +513,15 @@ wss.on('connection', (ws) => {
       sshClient.on('error', (err) => {
         ws.send(JSON.stringify({ type: 'error', text: err.message }));
       });
-      sshClient.connect({
+      const wsConnOpts = {
         host: msg.host,
         port: msg.port || 22,
         username: msg.username,
-        password: msg.password,
-        privateKey: msg.privateKey || undefined,
-      });
+      };
+      if (msg.password) wsConnOpts.password = msg.password;
+      if (msg.privateKey) wsConnOpts.privateKey = msg.privateKey;
+      if (!msg.password && !msg.privateKey) wsConnOpts.privateKey = getDefaultPrivateKey();
+      sshClient.connect(wsConnOpts);
     }
   });
 
