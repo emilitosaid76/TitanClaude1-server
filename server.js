@@ -16,7 +16,8 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Store saved SSH connections server-side for agent use
+const cheerio = require('cheerio');
+
 let savedSSHConns = [];
 
 app.get('/api/gpu', (_req, res) => {
@@ -110,6 +111,46 @@ app.post('/api/agent', async (req, res) => {
   res.end();
 });
 
+// Web fetch endpoint
+app.post('/api/web', async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: 'Missing url' });
+  try {
+    const resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(10000) });
+    const html = await resp.text();
+    const $ = cheerio.load(html);
+    $('script,style,nav,footer,header,iframe,noscript').remove();
+    const text = $('body').text().replace(/\s+/g, ' ').trim().slice(0, 8000);
+    res.json({ url, title: $('title').text(), content: text });
+  } catch (e) {
+    res.json({ url, error: e.message });
+  }
+});
+
+// Web search endpoint (DuckDuckGo HTML)
+app.post('/api/search', async (req, res) => {
+  const { query } = req.body;
+  if (!query) return res.status(400).json({ error: 'Missing query' });
+  try {
+    const resp = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(10000)
+    });
+    const html = await resp.text();
+    const $ = cheerio.load(html);
+    const results = [];
+    $('.result').each((i, el) => {
+      if (i >= 5) return false;
+      const title = $(el).find('.result__title a').text().trim();
+      const snippet = $(el).find('.result__snippet').text().trim();
+      const href = $(el).find('.result__title a').attr('href') || '';
+      if (title) results.push({ title, snippet, url: href });
+    });
+    res.json({ query, results });
+  } catch (e) {
+    res.json({ query, error: e.message });
+  }
+});
+
 function buildSystemPrompt(connections) {
   const connList = connections.length > 0
     ? connections.map(c => `- ${c.name}: ${c.username}@${c.host}`).join('\n')
@@ -136,7 +177,22 @@ command: <comando-a-ejecutar>
 - Para tareas complejas, divide en pasos y ejecuta uno a uno.
 - Siempre analiza y explica los resultados de forma clara y util.
 - Si un comando falla, intenta diagnosticar el problema.
-- Responde en el mismo idioma que el usuario.`;
+- Responde en el mismo idioma que el usuario.
+
+ACCESO A INTERNET:
+- Puedes buscar en la web y consultar paginas. Usa estos formatos:
+
+\`\`\`search
+query: <tu busqueda>
+\`\`\`
+
+\`\`\`web
+url: <url-a-consultar>
+\`\`\`
+
+- Usa search para buscar informacion actualizada en internet.
+- Usa web para leer el contenido de una pagina especifica.
+- Combina busqueda + lectura para dar respuestas basadas en informacion actual.`;
 }
 
 async function agentLoop(model, messages, sshConnections, res, depth = 0) {
@@ -191,9 +247,11 @@ async function agentLoop(model, messages, sshConnections, res, depth = 0) {
     } catch {}
   }
 
-  // Check for exec blocks
+  // Check for exec, search, and web blocks
   const execBlocks = parseExecBlocks(fullResponse);
-  if (execBlocks.length === 0) return;
+  const searchBlocks = parseSearchBlocks(fullResponse);
+  const webBlocks = parseWebBlocks(fullResponse);
+  if (execBlocks.length === 0 && searchBlocks.length === 0 && webBlocks.length === 0) return;
 
   // Execute each block
   messages.push({ role: 'assistant', content: fullResponse });
@@ -220,6 +278,51 @@ async function agentLoop(model, messages, sshConnections, res, depth = 0) {
     } catch (e) {
       res.write(`data: ${JSON.stringify({ type: 'exec_error', host: conn.host, error: e.message })}\n\n`);
       messages.push({ role: 'user', content: `[Error ejecutando comando en ${conn.host}]: ${e.message}` });
+    }
+  }
+
+  // Handle search blocks
+  for (const block of searchBlocks) {
+    res.write(`data: ${JSON.stringify({ type: 'exec_start', host: 'web', command: `search: ${block.query}` })}\n\n`);
+    try {
+      const resp = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(block.query)}`, {
+        headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(10000)
+      });
+      const html = await resp.text();
+      const $ = cheerio.load(html);
+      const results = [];
+      $('.result').each((i, el) => {
+        if (i >= 5) return false;
+        const title = $(el).find('.result__title a').text().trim();
+        const snippet = $(el).find('.result__snippet').text().trim();
+        const href = $(el).find('.result__title a').attr('href') || '';
+        if (title) results.push(`${title}\n${snippet}\n${href}`);
+      });
+      const output = results.join('\n\n') || '(sin resultados)';
+      res.write(`data: ${JSON.stringify({ type: 'exec_result', host: 'web', command: `search: ${block.query}`, output })}\n\n`);
+      messages.push({ role: 'user', content: `[Resultados de buscar "${block.query}"]:\n${output}` });
+    } catch (e) {
+      res.write(`data: ${JSON.stringify({ type: 'exec_error', host: 'web', error: e.message })}\n\n`);
+      messages.push({ role: 'user', content: `[Error buscando "${block.query}"]: ${e.message}` });
+    }
+  }
+
+  // Handle web blocks
+  for (const block of webBlocks) {
+    res.write(`data: ${JSON.stringify({ type: 'exec_start', host: 'web', command: `web: ${block.url}` })}\n\n`);
+    try {
+      const resp = await fetch(block.url, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(10000) });
+      const html = await resp.text();
+      const $ = cheerio.load(html);
+      $('script,style,nav,footer,header,iframe,noscript').remove();
+      const title = $('title').text();
+      const text = $('body').text().replace(/\s+/g, ' ').trim().slice(0, 8000);
+      const output = `Titulo: ${title}\n\n${text}`;
+      res.write(`data: ${JSON.stringify({ type: 'exec_result', host: 'web', command: `web: ${block.url}`, output })}\n\n`);
+      messages.push({ role: 'user', content: `[Contenido de ${block.url}]:\n${output}` });
+    } catch (e) {
+      res.write(`data: ${JSON.stringify({ type: 'exec_error', host: 'web', error: e.message })}\n\n`);
+      messages.push({ role: 'user', content: `[Error consultando ${block.url}]: ${e.message}` });
     }
   }
 
@@ -250,6 +353,30 @@ function parseExecBlocks(text) {
       }
     }
     if (host && command) blocks.push({ host, command });
+  }
+  return blocks;
+}
+
+function parseSearchBlocks(text) {
+  const blocks = [];
+  const regex = /```search\s*\n([\s\S]*?)```/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const content = match[1].trim();
+    const qMatch = content.match(/^query:\s*(.+)/im);
+    if (qMatch) blocks.push({ query: qMatch[1].trim() });
+  }
+  return blocks;
+}
+
+function parseWebBlocks(text) {
+  const blocks = [];
+  const regex = /```web\s*\n([\s\S]*?)```/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const content = match[1].trim();
+    const uMatch = content.match(/^url:\s*(.+)/im);
+    if (uMatch) blocks.push({ url: uMatch[1].trim() });
   }
   return blocks;
 }
