@@ -336,9 +336,17 @@
       </div>
       <div class="input-area">
         <div class="slash-menu" id="slashMenu"></div>
+        <div id="attachPreview" style="display:none;padding:8px 12px;background:var(--card2);border-radius:8px 8px 0 0;border:1px solid var(--border);border-bottom:none;font-size:12px;color:var(--muted);max-height:100px;overflow-y:auto"></div>
         <div class="input-wrapper">
+          <input type="file" id="fileInput" multiple style="display:none" onchange="handleFiles(this.files)">
+          <input type="file" id="folderInput" webkitdirectory multiple style="display:none" onchange="handleFiles(this.files)">
+          <button onclick="showUploadMenu(event)" title="Adjuntar archivos" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:20px;padding:4px 8px;transition:color .2s" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--muted)'">📎</button>
           <textarea id="userInput" rows="1" placeholder="Escribe tu mensaje o / para comandos" onkeydown="handleKey(event)" oninput="autoResize(this); checkSlash(this)"></textarea>
           <button class="send-btn" id="sendBtn" onclick="sendMessage()">&#x27A4;</button>
+        </div>
+        <div id="uploadMenu" style="display:none;position:absolute;bottom:60px;left:16px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:4px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,.3)">
+          <button onclick="document.getElementById('fileInput').click();hideUploadMenu()" style="display:block;width:100%;text-align:left;background:none;border:none;color:var(--fg);padding:8px 16px;cursor:pointer;font-size:13px;border-radius:4px" onmouseover="this.style.background='var(--card2)'" onmouseout="this.style.background='none'">📄 Archivos</button>
+          <button onclick="document.getElementById('folderInput').click();hideUploadMenu()" style="display:block;width:100%;text-align:left;background:none;border:none;color:var(--fg);padding:8px 16px;cursor:pointer;font-size:13px;border-radius:4px" onmouseover="this.style.background='var(--card2)'" onmouseout="this.style.background='none'">📁 Carpeta</button>
         </div>
       </div>
     </div>
@@ -611,13 +619,80 @@
       document.getElementById('metricExecs').textContent = execs;
     }
 
+    let attachedFiles = [];
+
+    function showUploadMenu(e) {
+      e.stopPropagation();
+      const menu = document.getElementById('uploadMenu');
+      menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+    }
+    function hideUploadMenu() { document.getElementById('uploadMenu').style.display = 'none'; }
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('#uploadMenu')) hideUploadMenu();
+    });
+
+    function handleFiles(files) {
+      const maxSize = 500 * 1024;
+      const textExts = /\.(txt|md|js|ts|jsx|tsx|py|java|kt|c|cpp|h|hpp|cs|go|rs|rb|php|html|css|scss|json|xml|yaml|yml|toml|ini|cfg|conf|sh|bash|bat|ps1|sql|r|swift|dart|lua|pl|ex|exs|hs|scala|gradle|cmake|makefile|dockerfile|gitignore|env|log|csv|tsv|svg)$/i;
+      Array.from(files).forEach(f => {
+        if (f.size > maxSize) { alert(`${f.name} es muy grande (max 500KB)`); return; }
+        const reader = new FileReader();
+        if (textExts.test(f.name) || f.type.startsWith('text/')) {
+          reader.onload = () => {
+            attachedFiles.push({ name: f.webkitRelativePath || f.name, content: reader.result, type: 'text' });
+            renderAttachPreview();
+          };
+          reader.readAsText(f);
+        } else if (f.type.startsWith('image/')) {
+          reader.onload = () => {
+            attachedFiles.push({ name: f.name, content: reader.result, type: 'image' });
+            renderAttachPreview();
+          };
+          reader.readAsDataURL(f);
+        } else {
+          reader.onload = () => {
+            attachedFiles.push({ name: f.webkitRelativePath || f.name, content: `[Archivo binario: ${f.name}, ${(f.size/1024).toFixed(1)}KB]`, type: 'binary' });
+            renderAttachPreview();
+          };
+          reader.readAsText(f);
+        }
+      });
+    }
+
+    function renderAttachPreview() {
+      const el = document.getElementById('attachPreview');
+      if (attachedFiles.length === 0) { el.style.display = 'none'; return; }
+      el.style.display = 'block';
+      el.innerHTML = attachedFiles.map((f, i) =>
+        `<span style="display:inline-flex;align-items:center;gap:4px;background:var(--card);padding:2px 8px;border-radius:4px;margin:2px 4px 2px 0;border:1px solid var(--border)">${f.type === 'image' ? '🖼' : '📄'} ${f.name} <span onclick="removeAttach(${i})" style="cursor:pointer;color:var(--danger);font-weight:bold;margin-left:4px">&times;</span></span>`
+      ).join('');
+    }
+
+    function removeAttach(i) { attachedFiles.splice(i, 1); renderAttachPreview(); }
+
+    function buildAttachContent(text) {
+      if (attachedFiles.length === 0) return text;
+      let content = text || '';
+      attachedFiles.forEach(f => {
+        if (f.type === 'image') {
+          content += `\n\n[Imagen adjunta: ${f.name}]`;
+        } else {
+          content += `\n\n--- Archivo: ${f.name} ---\n${f.content}\n--- Fin: ${f.name} ---`;
+        }
+      });
+      attachedFiles = [];
+      renderAttachPreview();
+      return content;
+    }
+
     async function sendMessage() {
       const input = document.getElementById('userInput');
       const text = input.value.trim();
-      if (!text || isStreaming) return;
+      if ((!text && attachedFiles.length === 0) || isStreaming) return;
 
+      const fullContent = buildAttachContent(text);
       const chat = chats.find(c => c.id === currentChatId);
-      chat.messages.push({ role: 'user', content: text });
+      chat.messages.push({ role: 'user', content: fullContent });
       if (chat.messages.length === 1) {
         chat.title = text.slice(0, 40) + (text.length > 40 ? '...' : '');
         renderChatList();
