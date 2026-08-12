@@ -1,14 +1,129 @@
 #!/usr/bin/env node
 const TITAN_HOST = process.env.TITAN_HOST || 'http://10.0.0.6:3000';
+const TITAN_MODEL = process.env.TITAN_MODEL || 'gemma4:12b';
 
 const [,, command, ...args] = process.argv;
+
+// El modelo es opcional. Se acepta `-m <modelo>` o un primer argumento con
+// forma de modelo (nombre:tag); todo lo demas es el mensaje. Asi no hace falta
+// pasar "" para usar el modelo por defecto: PowerShell descarta los argumentos
+// vacios y la tarea acababa interpretandose como nombre de modelo.
+function parseModelAndMessage(argv) {
+  const rest = [...argv];
+  let model = TITAN_MODEL;
+  if (rest[0] === '-m' || rest[0] === '--model') {
+    rest.shift();
+    model = rest.shift() || TITAN_MODEL;
+  } else if (rest[0] && /^[\w.-]+:[\w.-]+$/.test(rest[0])) {
+    model = rest.shift();
+  }
+  return { model, message: rest.join(' ') };
+}
+
+// Lee el stream SSE de /api/agent.
+//
+// Cualquier evento con un `type` no contemplado se avisa por stderr en vez de
+// descartarse: una generacion que consume miles de tokens y no imprime nada es
+// un fallo mudo muy caro de diagnosticar. Con TITAN_DEBUG=1 se vuelca ademas
+// cada evento crudo.
+async function streamResponse(resp) {
+  // Un error HTTP se veia igual que un modelo callado: ambos acababan en
+  // "no produjo una respuesta visible". Distinguirlos evita perseguir al
+  // modelo cuando lo que pasa es que el servidor esta caido.
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => '');
+    console.error(`[CLI] el servidor respondio ${resp.status} ${resp.statusText}. ` +
+                  `Esto es un fallo de infraestructura, no del modelo.`);
+    if (body) console.error(`[CLI] ${body.slice(0, 500)}`);
+    process.exitCode = 3;
+    return;
+  }
+
+  const debug = process.env.TITAN_DEBUG === '1';
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  const showThinking = debug || process.env.TITAN_THINKING === '1';
+  const seenTypes = new Set();
+  let buf = '';
+  let printed = 0;
+  let thought = 0;
+  let done = false;
+
+  while (!done) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    buf += decoder.decode(chunk.value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop();
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const data = line.slice(6);
+      if (data === '[DONE]') { done = true; break; }
+      if (debug) console.error(`[RAW] ${data}`);
+
+      let parsed;
+      try {
+        parsed = JSON.parse(data);
+      } catch (err) {
+        console.error(`[CLI] evento ilegible: ${err.message}`);
+        continue;
+      }
+
+      seenTypes.add(parsed.type);
+      switch (parsed.type) {
+        case 'text':
+          process.stdout.write(parsed.content);
+          printed += (parsed.content || '').length;
+          break;
+        // Los modelos gemma4 razonan antes de responder. Ese razonamiento va
+        // por su propio evento y no es la respuesta: ensucia la salida si se
+        // imprime, pero perderlo en silencio deja sin explicacion los casos en
+        // que el modelo agota el presupuesto pensando y no llega a contestar.
+        case 'thinking':
+          thought += (parsed.content || '').length;
+          if (showThinking) process.stderr.write(parsed.content);
+          break;
+        case 'exec_start':
+          console.log(`\n[EXEC ${parsed.host}] ${parsed.command}`);
+          break;
+        case 'exec_result':
+          console.log(`[RESULT] ${parsed.output}`);
+          break;
+        case 'exec_error':
+          console.log(`[ERROR] ${parsed.error}`);
+          break;
+        case 'context':
+          console.log(`\n[TOKENS] prompt:${parsed.promptTokens} eval:${parsed.evalTokens}`);
+          break;
+        default:
+          // Aqui es donde se perdian las respuestas largas sin dejar rastro.
+          console.error(`[CLI] evento no manejado '${parsed.type}': ` +
+                        JSON.stringify(parsed).slice(0, 300));
+      }
+    }
+  }
+
+  console.log('');
+  if (printed === 0) {
+    if (thought > 0) {
+      console.error(`[CLI] el modelo se quedo razonando (${thought} caracteres) ` +
+                    `y no llego a responder. Suele pasar con peticiones largas: ` +
+                    `parte la tarea en trozos o usa TITAN_THINKING=1 para verlo.`);
+    } else {
+      console.error(`[CLI] el stream no trajo texto. Tipos vistos: ` +
+                    `${[...seenTypes].join(', ') || 'ninguno'}. ` +
+                    `Reintenta con TITAN_DEBUG=1 para ver los eventos crudos.`);
+    }
+    process.exitCode = 2;
+  }
+}
 
 async function main() {
   switch (command) {
     case 'chat': {
-      const model = args[0] || 'gemma4:12b';
-      const message = args.slice(1).join(' ');
-      if (!message) { console.error('Usage: titan-cli chat <model> <message>'); process.exit(1); }
+      const { model, message } = parseModelAndMessage(args);
+      if (!message) { console.error('Usage: titan-cli chat [modelo|-m modelo] <mensaje>'); process.exit(1); }
       const resp = await fetch(`${TITAN_HOST}/api/agent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -18,30 +133,49 @@ async function main() {
           sshConnections: []
         })
       });
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split('\n');
-        buf = lines.pop();
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const data = line.slice(6);
-          if (data === '[DONE]') break;
-          try {
-            const parsed = JSON.parse(data);
-            if (parsed.type === 'text') process.stdout.write(parsed.content);
-            else if (parsed.type === 'exec_start') console.log(`\n[EXEC ${parsed.host}] ${parsed.command}`);
-            else if (parsed.type === 'exec_result') console.log(`[RESULT] ${parsed.output}`);
-            else if (parsed.type === 'exec_error') console.log(`[ERROR] ${parsed.error}`);
-            else if (parsed.type === 'context') console.log(`\n[TOKENS] prompt:${parsed.promptTokens} eval:${parsed.evalTokens}`);
-          } catch {}
+      await streamResponse(resp);
+      break;
+    }
+    // Comprueba las capas por separado. El fallo tipico no es "el modelo no
+    // contesta" sino que una capa de abajo esta caida, y desde el CLI las dos
+    // cosas se parecian demasiado.
+    case 'health': {
+      const ollamaHost = process.env.TITAN_OLLAMA ||
+                         `http://${new URL(TITAN_HOST).hostname}:11434`;
+      const probe = async (label, fn) => {
+        try {
+          console.log(`${label}: ${await fn()}`);
+        } catch (err) {
+          console.log(`${label}: CAIDO (${err.message})`);
         }
-      }
-      console.log('');
+      };
+
+      await probe('1. servidor Titan  ', async () => {
+        const r = await fetch(`${TITAN_HOST}/api/models`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return `OK (${(await r.json()).models.length} modelos)`;
+      });
+
+      await probe('2. Ollama vivo     ', async () => {
+        const r = await fetch(`${ollamaHost}/api/version`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return `OK (v${(await r.json()).version})`;
+      });
+
+      // Esta es la que importa: los endpoints de metadatos siguen respondiendo
+      // aunque el runner de inferencia no arranque.
+      await probe('3. inferencia      ', async () => {
+        const r = await fetch(`${ollamaHost}/api/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: TITAN_MODEL, prompt: 'hi', stream: false })
+        });
+        if (!r.ok) {
+          throw new Error(`HTTP ${r.status} — Ollama responde pero no genera. ` +
+                          `Reinicia Ollama en el servidor y mira su log.`);
+        }
+        return `OK (${(await r.json()).eval_count} tokens con ${TITAN_MODEL})`;
+      });
       break;
     }
     case 'models': {
@@ -104,8 +238,8 @@ async function main() {
       break;
     }
     case 'agent': {
-      const model = args[0] || 'gemma4:12b';
-      const message = args.slice(1).join(' ');
+      const { model, message } = parseModelAndMessage(args);
+      if (!message) { console.error('Usage: titan-cli agent [modelo|-m modelo] <mensaje>'); process.exit(1); }
       const sshConnections = [
         { name: 'geodrone', host: '10.0.0.17', port: 22, username: 'emilio' },
         { name: 'hermes', host: '10.0.0.21', port: 22, username: 'emilio' },
@@ -118,29 +252,7 @@ async function main() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model, messages: [{ role: 'user', content: message }], sshConnections })
       });
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split('\n');
-        buf = lines.pop();
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const data = line.slice(6);
-          if (data === '[DONE]') break;
-          try {
-            const parsed = JSON.parse(data);
-            if (parsed.type === 'text') process.stdout.write(parsed.content);
-            else if (parsed.type === 'exec_start') console.log(`\n[EXEC ${parsed.host}] ${parsed.command}`);
-            else if (parsed.type === 'exec_result') console.log(`[RESULT] ${parsed.output}`);
-            else if (parsed.type === 'exec_error') console.log(`[ERROR] ${parsed.error}`);
-          } catch {}
-        }
-      }
-      console.log('');
+      await streamResponse(resp);
       break;
     }
     default:
@@ -148,17 +260,21 @@ async function main() {
 Uso: titan-cli <comando> [args]
 
 Comandos:
+  health                      Comprueba servidor, Ollama e inferencia por capas
   models                      Lista modelos disponibles
   gpu                         Estado de la GPU
-  chat <modelo> <mensaje>     Chat simple (sin SSH)
-  agent <modelo> <mensaje>    Chat agentico (con SSH a todos los servers)
+  chat [modelo] <mensaje>     Chat simple (sin SSH). Modelo opcional: nombre:tag o -m <modelo>
+  agent [modelo] <mensaje>    Chat agentico (con SSH a todos los servers)
   exec <host> <comando>       Ejecutar comando SSH
   search <query>              Buscar en internet
   web <url>                   Leer pagina web
   restart-ollama              Reiniciar Ollama
 
 Variables de entorno:
-  TITAN_HOST                  URL del servidor (default: http://10.0.0.6:3000)`);
+  TITAN_HOST                  URL del servidor (default: http://10.0.0.6:3000)
+  TITAN_MODEL                 Modelo por defecto (default: ${TITAN_MODEL})
+  TITAN_THINKING=1            Muestra el razonamiento del modelo por stderr
+  TITAN_DEBUG=1               Vuelca los eventos crudos del stream`);
   }
 }
 
