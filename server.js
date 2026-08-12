@@ -447,7 +447,7 @@ function trimAfterLastToolBlock(text) {
   return lastEnd > 0 ? text.slice(0, lastEnd) : text;
 }
 
-async function agentLoop(model, messages, sshConnections, res, depth = 0, verifyRetries = 0) {
+async function agentLoop(model, messages, sshConnections, res, depth = 0, verifyRetries = 0, emptyRetries = 0) {
   if (depth > 10) {
     res.write(`data: ${JSON.stringify({ type: 'text', content: '\n\n*Se alcanzó el límite de ejecuciones automáticas.*' })}\n\n`);
     return;
@@ -529,12 +529,22 @@ async function agentLoop(model, messages, sshConnections, res, depth = 0, verify
   if (execBlocks.length === 0 && searchBlocks.length === 0 && webBlocks.length === 0) {
     // Turno vacio: el modelo gasto todo su presupuesto en 'thinking' y no escribio nada.
     // Sin esto el agente terminaba en silencio, sin responderle nada al usuario.
-    if (!fullResponse.trim() && depth <= 10) {
+    //
+    // El limite propio es imprescindible: al acotarlo solo por 'depth' esto se
+    // disparaba hasta 10 veces, y cada intento acumulaba otro reproche en el
+    // historial. El banco lo cazo — una corrida de 11 iteraciones que acabo en 40%
+    // frente a 3 iteraciones y 100% de las buenas.
+    if (!fullResponse.trim() && emptyRetries < 2 && depth <= 10) {
       messages.push({
         role: 'user',
         content: 'No emitiste ninguna respuesta visible. Responde AHORA la pregunta original de forma directa y completa, usando los datos que ya obtuviste. No uses mas herramientas.',
       });
-      return await agentLoop(model, messages, sshConnections, res, depth + 1, verifyRetries);
+      return await agentLoop(model, messages, sshConnections, res, depth + 1, verifyRetries, emptyRetries + 1);
+    }
+    // Agotados los intentos, decirlo en vez de cortar en silencio.
+    if (!fullResponse.trim()) {
+      res.write(`data: ${JSON.stringify({ type: 'text', content: '\n\n*El modelo no produjo una respuesta visible tras varios intentos.*' })}\n\n`);
+      return;
     }
     // El modelo dio una respuesta final pero admitio no haber verificado algo
     // (ej. "se debe revisar platformio.ini") sin usar web en este mismo turno.
@@ -547,7 +557,7 @@ async function agentLoop(model, messages, sshConnections, res, depth = 0, verify
         role: 'user',
         content: 'Dijiste que hay que revisar o confirmar algo, pero no lo verificaste en tu respuesta. Usa un bloque web para leer esa fuente AHORA MISMO y luego responde de nuevo con el dato ya verificado, citando de donde salio.',
       });
-      return await agentLoop(model, messages, sshConnections, res, depth + 1, verifyRetries + 1);
+      return await agentLoop(model, messages, sshConnections, res, depth + 1, verifyRetries + 1, emptyRetries);
     }
     return;
   }
@@ -613,7 +623,8 @@ async function agentLoop(model, messages, sshConnections, res, depth = 0, verify
   }
 
   // Continue the agent loop so the model can analyze results
-  await agentLoop(model, messages, sshConnections, res, depth + 1, verifyRetries);
+  // Tras ejecutar herramientas el turno fue productivo: se reinicia el contador de vacios.
+  await agentLoop(model, messages, sshConnections, res, depth + 1, verifyRetries, 0);
 }
 
 function parseExecBlocks(text) {
