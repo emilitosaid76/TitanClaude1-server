@@ -333,6 +333,13 @@ PROHIBIDO:
 
 Si no encontraste un dato especifico despues de buscar, di "No encontre este dato en las fuentes consultadas" en vez de inventarlo.
 
+=== DETENTE AL EMITIR UN BLOQUE ===
+
+Cuando escribas un bloque exec, search o web, DETENTE ahi mismo. No escribas ni una palabra
+mas en ese turno. El sistema ejecuta el bloque y te devuelve el resultado; recien entonces
+respondes. Si sigues escribiendo antes de tener el resultado estas inventando, y el usuario
+terminara viendo dos respuestas distintas a la misma pregunta.
+
 === CITA LA FUENTE DE CADA DATO ===
 
 Cada dato tecnico que afirmes debe indicar de donde salio, entre parentesis: el archivo o la URL.
@@ -411,7 +418,22 @@ Ingeniero senior 15+ anos: Java/Android (Compose, Spring), Python (FastAPI, pand
 5. Despues de search, usa web para leer las fuentes antes de responder.`;
 }
 
-async function agentLoop(model, messages, sshConnections, res, depth = 0) {
+// Frases que indican que el modelo senalo un dato como "hay que verificarlo" sin
+// haberlo hecho en el mismo turno. Fallo real observado: dijo "se debe revisar
+// platformio.ini" y respondio sin leerlo.
+const DEFERRED_VERIFICATION_RE = /(se debe revisar|hay que revisar|para confirmar|deber[ií]as revisar|revisa(r)? el archivo|consultar el archivo)/i;
+
+// El modelo a veces emite un bloque de herramienta y sigue respondiendo en el mismo
+// turno, antes de tener el resultado. Esa parte es especulativa: si se guarda en el
+// historial, el modelo cree que ya contesto y vuelve a contestar => respuesta duplicada.
+function trimAfterLastToolBlock(text) {
+  const re = /```(?:exec|search|web)[\s\S]*?```/g;
+  let lastEnd = -1, m;
+  while ((m = re.exec(text)) !== null) lastEnd = m.index + m[0].length;
+  return lastEnd > 0 ? text.slice(0, lastEnd) : text;
+}
+
+async function agentLoop(model, messages, sshConnections, res, depth = 0, verifyRetries = 0) {
   if (depth > 10) {
     res.write(`data: ${JSON.stringify({ type: 'text', content: '\n\n*Se alcanzó el límite de ejecuciones automáticas.*' })}\n\n`);
     return;
@@ -498,7 +520,20 @@ async function agentLoop(model, messages, sshConnections, res, depth = 0) {
         role: 'user',
         content: 'No emitiste ninguna respuesta visible. Responde AHORA la pregunta original de forma directa y completa, usando los datos que ya obtuviste. No uses mas herramientas.',
       });
-      return await agentLoop(model, messages, sshConnections, res, depth + 1);
+      return await agentLoop(model, messages, sshConnections, res, depth + 1, verifyRetries);
+    }
+    // El modelo dio una respuesta final pero admitio no haber verificado algo
+    // (ej. "se debe revisar platformio.ini") sin usar web en este mismo turno.
+    // Antes esto se aceptaba tal cual; ahora se le exige ir a verificarlo.
+    if (DEFERRED_VERIFICATION_RE.test(fullResponse) && verifyRetries < 2 && depth <= 10) {
+      const assistantMsg = { role: 'assistant', content: fullResponse };
+      if (fullThinking.trim()) assistantMsg.thinking = fullThinking.slice(0, THINKING_CARRY_CHARS);
+      messages.push(assistantMsg);
+      messages.push({
+        role: 'user',
+        content: 'Dijiste que hay que revisar o confirmar algo, pero no lo verificaste en tu respuesta. Usa un bloque web para leer esa fuente AHORA MISMO y luego responde de nuevo con el dato ya verificado, citando de donde salio.',
+      });
+      return await agentLoop(model, messages, sshConnections, res, depth + 1, verifyRetries + 1);
     }
     return;
   }
@@ -506,7 +541,7 @@ async function agentLoop(model, messages, sshConnections, res, depth = 0) {
   // Execute each block.
   // Devolvemos tambien el razonamiento: sin el, el modelo vuelve a derivar en cada
   // iteracion lo que ya habia pensado. Se acota para no inflar el contexto.
-  const assistantMsg = { role: 'assistant', content: fullResponse };
+  const assistantMsg = { role: 'assistant', content: trimAfterLastToolBlock(fullResponse) };
   if (fullThinking.trim()) assistantMsg.thinking = fullThinking.slice(0, THINKING_CARRY_CHARS);
   messages.push(assistantMsg);
 
@@ -564,7 +599,7 @@ async function agentLoop(model, messages, sshConnections, res, depth = 0) {
   }
 
   // Continue the agent loop so the model can analyze results
-  await agentLoop(model, messages, sshConnections, res, depth + 1);
+  await agentLoop(model, messages, sshConnections, res, depth + 1, verifyRetries);
 }
 
 function parseExecBlocks(text) {
