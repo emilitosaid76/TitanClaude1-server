@@ -6,14 +6,16 @@
 // vigilan errores concretos que ya ocurrieron, para detectar regresiones.
 //
 // Uso:
-//   node bench/bench.js [modelo] [repeticiones]
+//   node bench/bench.js [modelo] [repeticiones] [idTarea]
 //   WS_PASS=xxx node bench/bench.js gemma4:12b 3
+//   WS_PASS=xxx node bench/bench.js gemma4:12b 3 hardware   # solo una tarea
 //
 // WS_PASS solo hace falta para la tarea de SSH; sin el, esa tarea se omite.
 
 const HOST = process.env.TITAN_HOST || 'http://10.0.0.6:3000';
 const MODEL = process.argv[2] || 'gemma4:12b';
 const RUNS = parseInt(process.argv[3], 10) || 3;
+const SOLO = process.argv[4] || null;  // id de tarea, para medir una sola
 const WS_PASS = process.env.WS_PASS;
 
 const SSH_WORKSTATION = [{ name: 'workstation', host: '10.0.0.6', port: 22, username: 'GEODRONE', password: WS_PASS }];
@@ -102,6 +104,7 @@ async function correr(tarea) {
   const resumen = [];
 
   for (const tarea of TAREAS) {
+    if (SOLO && tarea.id !== SOLO) continue;
     if (tarea.requiereSsh && !WS_PASS) {
       console.log(`\n### ${tarea.titulo}\n  OMITIDA: requiere WS_PASS en el entorno\n`);
       continue;

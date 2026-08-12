@@ -12,7 +12,12 @@ WS_PASS=tu_clave node bench/bench.js gemma4:12b 3
 
 # Sin WS_PASS la tarea de SSH se omite y el resto corre igual
 node bench/bench.js gemma4:26b 3
+
+# Una sola tarea, para verificar un arreglo concreto sin gastar 10 min
+WS_PASS=tu_clave node bench/bench.js gemma4:12b 4 hardware
 ```
+
+Ids de tarea: `hardware`, `firmware`, `fastapi`.
 
 ## Que mide
 
