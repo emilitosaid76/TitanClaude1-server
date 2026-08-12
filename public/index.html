@@ -425,7 +425,10 @@
         const data = await resp.json();
         const sel = document.getElementById('modelSelect');
         sel.innerHTML = '';
-        (data.models || []).forEach(m => {
+        const models = data.models || [];
+        const preferred = 'gemma4:26b';
+        models.sort((a, b) => a.name === preferred ? -1 : b.name === preferred ? 1 : 0);
+        models.forEach(m => {
           const opt = document.createElement('option');
           opt.value = m.name;
           opt.textContent = m.name;
@@ -632,10 +635,10 @@
     });
 
     function handleFiles(files) {
-      const maxSize = 500 * 1024;
+      const maxSize = 10 * 1024 * 1024;
       const textExts = /\.(txt|md|js|ts|jsx|tsx|py|java|kt|c|cpp|h|hpp|cs|go|rs|rb|php|html|css|scss|json|xml|yaml|yml|toml|ini|cfg|conf|sh|bash|bat|ps1|sql|r|swift|dart|lua|pl|ex|exs|hs|scala|gradle|cmake|makefile|dockerfile|gitignore|env|log|csv|tsv|svg)$/i;
       Array.from(files).forEach(f => {
-        if (f.size > maxSize) { alert(`${f.name} es muy grande (max 500KB)`); return; }
+        if (f.size > maxSize) { alert(`${f.name} es muy grande (max 10MB)`); return; }
         const reader = new FileReader();
         if (textExts.test(f.name) || f.type.startsWith('text/')) {
           reader.onload = () => {
