@@ -6,7 +6,7 @@ const [,, command, ...args] = process.argv;
 async function main() {
   switch (command) {
     case 'chat': {
-      const model = args[0] || 'gemma4:26b';
+      const model = args[0] || 'gemma4:12b';
       const message = args.slice(1).join(' ');
       if (!message) { console.error('Usage: titan-cli chat <model> <message>'); process.exit(1); }
       const resp = await fetch(`${TITAN_HOST}/api/agent`, {
@@ -104,7 +104,7 @@ async function main() {
       break;
     }
     case 'agent': {
-      const model = args[0] || 'gemma4:26b';
+      const model = args[0] || 'gemma4:12b';
       const message = args.slice(1).join(' ');
       const sshConnections = [
         { name: 'geodrone', host: '10.0.0.17', port: 22, username: 'emilio' },
