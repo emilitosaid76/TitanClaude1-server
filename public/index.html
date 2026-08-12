@@ -425,10 +425,8 @@
         const data = await resp.json();
         const sel = document.getElementById('modelSelect');
         sel.innerHTML = '';
+        // El servidor ya devuelve el modelo preferido primero (ver DEFAULT_MODEL).
         const models = data.models || [];
-        // 12b entra completo en los 12GB de la GPU; el 26b (17GB) desborda a RAM.
-        const preferred = 'gemma4:12b';
-        models.sort((a, b) => a.name === preferred ? -1 : b.name === preferred ? 1 : 0);
         models.forEach(m => {
           const opt = document.createElement('option');
           opt.value = m.name;

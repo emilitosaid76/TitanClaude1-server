@@ -24,6 +24,7 @@ const OLLAMA_HOST = '127.0.0.1';
 const OLLAMA_PORT = process.env.OLLAMA_PORT || 11434;
 const PORT = process.env.PORT || 3000;
 const NUM_CTX = parseInt(process.env.NUM_CTX, 10) || 8192;
+const DEFAULT_MODEL = process.env.DEFAULT_MODEL || 'gemma4:12b';  // entra al 100% en la GPU de 12GB
 const THINKING_CARRY_CHARS = 3000;  // cuanto razonamiento se arrastra a la siguiente iteracion
 
 app.use(express.json({ limit: '10mb' }));
@@ -67,6 +68,11 @@ app.get('/api/models', async (_req, res) => {
   try {
     const resp = await fetch(`http://${OLLAMA_HOST}:${OLLAMA_PORT}/api/tags`);
     const data = await resp.json();
+    // El modelo preferido va primero: los clientes que toman el primero de la lista
+    // (la app Android hace models.first()) arrancaban con el 26b, que no cabe en la GPU.
+    if (Array.isArray(data.models)) {
+      data.models.sort((a, b) => (a.name === DEFAULT_MODEL ? -1 : b.name === DEFAULT_MODEL ? 1 : 0));
+    }
     res.json(data);
   } catch (e) {
     res.status(502).json({ error: 'Cannot reach Ollama at ' + OLLAMA_HOST });
