@@ -30,7 +30,9 @@ const DEFAULT_MODEL = process.env.DEFAULT_MODEL || 'gemma4:12b';  // entra al 10
 // este repositorio es publico. Sin clave, el servidor se comporta igual que antes.
 const MOONSHOT_KEY = process.env.MOONSHOT_API_KEY || '';
 const MOONSHOT_BASE = process.env.MOONSHOT_BASE || 'https://api.moonshot.ai/v1';
-const MOONSHOT_MODELS = (process.env.MOONSHOT_MODELS || 'kimi-k2-0905-preview,moonshot-v1-128k')
+// Nombres consultados a /v1/models de la cuenta real: inventarlos da "modelo inexistente".
+// Se pueden cambiar sin tocar codigo con MOONSHOT_MODELS en env.cmd.
+const MOONSHOT_MODELS = (process.env.MOONSHOT_MODELS || 'kimi-k2.7-code,kimi-k3,kimi-k2.6,kimi-k2.7-code-highspeed')
   .split(',').map(s => s.trim()).filter(Boolean);
 
 /** Los modelos en la nube se enrutan a Moonshot; el resto va a Ollama. */
@@ -172,20 +174,24 @@ app.post('/api/agent', async (req, res) => {
   res.end();
 });
 
+// Limite pensado para el contexto local de 8192 tokens. Los modelos de nube tienen
+// contextos mucho mayores: recortarles igual les hacia gastar llamadas intentando
+// recuperar el resto de un archivo truncado.
 const WEB_MAX_CHARS = 6000;
+const WEB_MAX_CHARS_CLOUD = parseInt(process.env.WEB_MAX_CHARS_CLOUD, 10) || 24000;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 // Fetch a GitHub file as raw text (no UI noise, no line-number soup)
-async function fetchGithubRaw(owner, repo, branch, path) {
+async function fetchGithubRaw(owner, repo, branch, path, maxChars = WEB_MAX_CHARS) {
   const raw = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path}`;
   const r = await fetch(raw, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(10000) });
   if (!r.ok) throw new Error(`raw fetch ${r.status}`);
   const text = await r.text();
-  return { title: `${owner}/${repo}/${path}`, content: text.slice(0, WEB_MAX_CHARS) };
+  return { title: `${owner}/${repo}/${path}`, content: text.slice(0, maxChars) };
 }
 
 // List the real file structure of a repo via the GitHub API
-async function fetchGithubTree(owner, repo, branch) {
+async function fetchGithubTree(owner, repo, branch, maxChars = WEB_MAX_CHARS) {
   const api = `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch || 'HEAD'}?recursive=1`;
   const r = await fetch(api, {
     headers: { 'User-Agent': UA, 'Accept': 'application/vnd.github+json' },
@@ -205,7 +211,7 @@ async function fetchGithubTree(owner, repo, branch) {
   let body = '';
   let shown = 0;
   for (const p of paths) {
-    if (header.length + body.length + p.length + 1 > WEB_MAX_CHARS - 60) break;
+    if (header.length + body.length + p.length + 1 > maxChars - 60) break;
     body += p + '\n';
     shown++;
   }
@@ -218,17 +224,17 @@ async function fetchGithubTree(owner, repo, branch) {
 
 // Unico punto de extraccion web. Lo usan el endpoint /api/web Y el agent loop:
 // tener dos implementaciones separadas hizo que el modelo recibiera texto sin limpiar.
-async function fetchWebContent(url) {
+async function fetchWebContent(url, maxChars = WEB_MAX_CHARS) {
   // GitHub necesita trato especial: sus paginas renderizadas son casi todo UI
   const blob = url.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+?)(?:[?#].*)?$/);
   if (blob) {
     const [, owner, repo, branch, path] = blob;
-    return await fetchGithubRaw(owner, repo, branch, path);
+    return await fetchGithubRaw(owner, repo, branch, path, maxChars);
   }
   const tree = url.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\/tree\/([^/]+))?\/?(?:[?#].*)?$/);
   if (tree) {
     const [, owner, repo, branch] = tree;
-    return await fetchGithubTree(owner, repo, branch);
+    return await fetchGithubTree(owner, repo, branch, maxChars);
   }
 
   const resp = await fetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(10000) });
@@ -237,7 +243,7 @@ async function fetchWebContent(url) {
 
   // Texto plano / archivos raw no necesitan parseo HTML
   if (!ctype.includes('html')) {
-    return { title: url.split('/').pop(), content: body.slice(0, WEB_MAX_CHARS) };
+    return { title: url.split('/').pop(), content: body.slice(0, maxChars) };
   }
 
   const $ = cheerio.load(body);
@@ -248,7 +254,7 @@ async function fetchWebContent(url) {
     .replace(/\s+/g, ' ')
     .replace(/\b\d{20,}\b/g, ' ')  // quita la sopa de numeros de linea de los visores de codigo
     .trim()
-    .slice(0, WEB_MAX_CHARS);
+    .slice(0, maxChars);
   return { title: $('title').text(), content: text };
 }
 
@@ -543,7 +549,17 @@ async function streamMoonshot(model, messages, res) {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${MOONSHOT_KEY}`,
     },
-    body: JSON.stringify({ model, messages, stream: true, temperature: 0.3 }),
+    // Sin temperature: cada modelo de Kimi impone la suya (k2.7-code solo admite 1)
+    // y forzarla desde aqui hacia fallar la peticion entera. Ajustable si hace falta.
+    body: JSON.stringify({
+      model,
+      messages,
+      stream: true,
+      // Necesario para recibir el consumo: con un modelo de pago, no saber cuantos
+      // tokens gasta cada tarea es volar a ciegas sobre la factura.
+      stream_options: { include_usage: true },
+      ...(process.env.MOONSHOT_TEMPERATURE ? { temperature: Number(process.env.MOONSHOT_TEMPERATURE) } : {}),
+    }),
   });
 
   if (!resp.ok) {
@@ -691,7 +707,7 @@ async function agentLoop(model, messages, sshConnections, res, depth = 0, verify
   for (const block of webBlocks) {
     res.write(`data: ${JSON.stringify({ type: 'exec_start', host: 'web', command: `web: ${block.url}` })}\n\n`);
     try {
-      const { title, content } = await fetchWebContent(block.url);
+      const { title, content } = await fetchWebContent(block.url, isCloudModel(model) ? WEB_MAX_CHARS_CLOUD : WEB_MAX_CHARS);
       const output = `Titulo: ${title}\n\n${content}`;
       res.write(`data: ${JSON.stringify({ type: 'exec_result', host: 'web', command: `web: ${block.url}`, output })}\n\n`);
       messages.push({ role: 'user', content: `[Contenido de ${block.url}]:\n${output}` });
