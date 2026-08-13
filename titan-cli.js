@@ -1,6 +1,20 @@
 #!/usr/bin/env node
 const TITAN_HOST = process.env.TITAN_HOST || 'http://10.0.0.6:3000';
-const TITAN_MODEL = process.env.TITAN_MODEL || 'gemma4:12b';
+// Sin TITAN_MODEL se pregunta al servidor cual prefiere, en vez de fijar uno aqui:
+// si la GPU esta fuera, un nombre local cableado en el cliente falla siempre.
+const TITAN_MODEL = process.env.TITAN_MODEL || '';
+
+/** Devuelve el modelo pedido, o el preferido del servidor si no se indico ninguno. */
+async function resolveModel(model) {
+  if (model) return model;
+  try {
+    const r = await fetch(`${TITAN_HOST}/api/models`);
+    const d = await r.json();
+    return d.models?.[0]?.name || 'gemma4:12b';
+  } catch {
+    return 'gemma4:12b';
+  }
+}
 
 const [,, command, ...args] = process.argv;
 
@@ -14,7 +28,7 @@ function parseModelAndMessage(argv) {
   if (rest[0] === '-m' || rest[0] === '--model') {
     rest.shift();
     model = rest.shift() || TITAN_MODEL;
-  } else if (rest[0] && /^[\w.-]+:[\w.-]+$/.test(rest[0])) {
+  } else if (rest[0] && (/^[\w.-]+:[\w.-]+$/.test(rest[0]) || /^(kimi|moonshot)[\w.-]*$/i.test(rest[0]))) {
     model = rest.shift();
   }
   return { model, message: rest.join(' ') };
@@ -122,7 +136,8 @@ async function streamResponse(resp) {
 async function main() {
   switch (command) {
     case 'chat': {
-      const { model, message } = parseModelAndMessage(args);
+      const { model: modelPedido, message } = parseModelAndMessage(args);
+      const model = await resolveModel(modelPedido);
       if (!message) { console.error('Usage: titan-cli chat [modelo|-m modelo] <mensaje>'); process.exit(1); }
       const resp = await fetch(`${TITAN_HOST}/api/agent`, {
         method: 'POST',
@@ -168,13 +183,13 @@ async function main() {
         const r = await fetch(`${ollamaHost}/api/generate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: TITAN_MODEL, prompt: 'hi', stream: false })
+          body: JSON.stringify({ model: await resolveModel(TITAN_MODEL), prompt: 'hi', stream: false })
         });
         if (!r.ok) {
           throw new Error(`HTTP ${r.status} — Ollama responde pero no genera. ` +
                           `Reinicia Ollama en el servidor y mira su log.`);
         }
-        return `OK (${(await r.json()).eval_count} tokens con ${TITAN_MODEL})`;
+        return `OK (${(await r.json()).eval_count} tokens)`;
       });
       break;
     }
@@ -238,7 +253,8 @@ async function main() {
       break;
     }
     case 'agent': {
-      const { model, message } = parseModelAndMessage(args);
+      const { model: modelPedido, message } = parseModelAndMessage(args);
+      const model = await resolveModel(modelPedido);
       if (!message) { console.error('Usage: titan-cli agent [modelo|-m modelo] <mensaje>'); process.exit(1); }
       const sshConnections = [
         { name: 'geodrone', host: '10.0.0.17', port: 22, username: 'emilio' },
@@ -272,7 +288,7 @@ Comandos:
 
 Variables de entorno:
   TITAN_HOST                  URL del servidor (default: http://10.0.0.6:3000)
-  TITAN_MODEL                 Modelo por defecto (default: ${TITAN_MODEL})
+  TITAN_MODEL                 Modelo por defecto (si no, el preferido del servidor)
   TITAN_THINKING=1            Muestra el razonamiento del modelo por stderr
   TITAN_DEBUG=1               Vuelca los eventos crudos del stream`);
   }

@@ -88,11 +88,11 @@ app.get('/api/models', async (_req, res) => {
     const data = await resp.json();
     // El modelo preferido va primero: los clientes que toman el primero de la lista
     // (la app Android hace models.first()) arrancaban con el 26b, que no cabe en la GPU.
-    if (Array.isArray(data.models)) {
-      data.models.sort((a, b) => (a.name === DEFAULT_MODEL ? -1 : b.name === DEFAULT_MODEL ? 1 : 0));
-      data.models.push(...cloud);
-    }
-    res.json(data);
+    // Se ordena sobre la lista COMBINADA: si el preferido es de nube y se ordenara
+    // solo la parte local, quedaria al final y ningun cliente lo elegiria.
+    const todos = [...(Array.isArray(data.models) ? data.models : []), ...cloud];
+    todos.sort((a, b) => (a.name === DEFAULT_MODEL ? -1 : b.name === DEFAULT_MODEL ? 1 : 0));
+    res.json({ ...data, models: todos });
   } catch (e) {
     // Ollama caido: devolver al menos los de nube en vez de dejar al cliente sin nada
     if (cloud.length) return res.json({ models: cloud, warning: 'Ollama no responde' });
