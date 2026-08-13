@@ -25,6 +25,18 @@ const OLLAMA_PORT = process.env.OLLAMA_PORT || 11434;
 const PORT = process.env.PORT || 3000;
 const NUM_CTX = parseInt(process.env.NUM_CTX, 10) || 8192;
 const DEFAULT_MODEL = process.env.DEFAULT_MODEL || 'gemma4:12b';  // entra al 100% en la GPU de 12GB
+
+// Kimi (Moonshot) como modelo en la nube, opcional. La clave va SIEMPRE por entorno:
+// este repositorio es publico. Sin clave, el servidor se comporta igual que antes.
+const MOONSHOT_KEY = process.env.MOONSHOT_API_KEY || '';
+const MOONSHOT_BASE = process.env.MOONSHOT_BASE || 'https://api.moonshot.ai/v1';
+const MOONSHOT_MODELS = (process.env.MOONSHOT_MODELS || 'kimi-k2-0905-preview,moonshot-v1-128k')
+  .split(',').map(s => s.trim()).filter(Boolean);
+
+/** Los modelos en la nube se enrutan a Moonshot; el resto va a Ollama. */
+function isCloudModel(model) {
+  return MOONSHOT_MODELS.includes(model) || /^(kimi|moonshot)/i.test(model || '');
+}
 const THINKING_CARRY_CHARS = 3000;  // cuanto razonamiento se arrastra a la siguiente iteracion
 
 app.use(express.json({ limit: '10mb' }));
@@ -65,6 +77,10 @@ app.post('/api/ollama/restart', (_req, res) => {
 });
 
 app.get('/api/models', async (_req, res) => {
+  // Los modelos de nube no dependen de Ollama: si Ollama se cae, siguen disponibles.
+  const cloud = MOONSHOT_KEY
+    ? MOONSHOT_MODELS.map(m => ({ name: m, cloud: true, details: { parameter_size: 'nube', quantization_level: 'Moonshot' } }))
+    : [];
   try {
     const resp = await fetch(`http://${OLLAMA_HOST}:${OLLAMA_PORT}/api/tags`);
     const data = await resp.json();
@@ -72,9 +88,12 @@ app.get('/api/models', async (_req, res) => {
     // (la app Android hace models.first()) arrancaban con el 26b, que no cabe en la GPU.
     if (Array.isArray(data.models)) {
       data.models.sort((a, b) => (a.name === DEFAULT_MODEL ? -1 : b.name === DEFAULT_MODEL ? 1 : 0));
+      data.models.push(...cloud);
     }
     res.json(data);
   } catch (e) {
+    // Ollama caido: devolver al menos los de nube en vez de dejar al cliente sin nada
+    if (cloud.length) return res.json({ models: cloud, warning: 'Ollama no responde' });
     res.status(502).json({ error: 'Cannot reach Ollama at ' + OLLAMA_HOST });
   }
 });
@@ -453,14 +472,16 @@ function trimAfterLastToolBlock(text) {
   return lastEnd > 0 ? text.slice(0, lastEnd) : text;
 }
 
-async function agentLoop(model, messages, sshConnections, res, depth = 0, verifyRetries = 0, emptyRetries = 0) {
-  if (depth > 10) {
-    res.write(`data: ${JSON.stringify({ type: 'text', content: '\n\n*Se alcanzó el límite de ejecuciones automáticas.*' })}\n\n`);
-    return;
-  }
+/** Emite un fragmento de respuesta al cliente y lo acumula. */
+function emitChunk(res, acc, type, content) {
+  if (!content) return acc;
+  res.write(`data: ${JSON.stringify({ type, content })}\n\n`);
+  return acc + content;
+}
 
-  // Call Ollama
-  const ollamaResp = await fetch(`http://${OLLAMA_HOST}:${OLLAMA_PORT}/api/chat`, {
+/** Ollama: NDJSON, un objeto JSON por linea. */
+async function streamOllama(model, messages, res) {
+  const resp = await fetch(`http://${OLLAMA_HOST}:${OLLAMA_PORT}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -476,11 +497,23 @@ async function agentLoop(model, messages, sshConnections, res, depth = 0, verify
     }),
   });
 
-  const reader = ollamaResp.body.getReader();
+  const reader = resp.body.getReader();
   const decoder = new TextDecoder();
-  let buf = '';
-  let fullResponse = '';
-  let fullThinking = '';
+  let buf = '', fullResponse = '', fullThinking = '';
+
+  const handle = (linea) => {
+    if (!linea.trim()) return;
+    try {
+      const p = JSON.parse(linea);
+      fullResponse = emitChunk(res, fullResponse, 'text', p.message?.content);
+      // Los modelos de razonamiento (gemma4) separan su salida en 'thinking';
+      // ignorarla hacia que un turno entero se perdiera sin dejar rastro.
+      fullThinking = emitChunk(res, fullThinking, 'thinking', p.message?.thinking);
+      if (p.done && (p.prompt_eval_count || p.eval_count)) {
+        res.write(`data: ${JSON.stringify({ type: 'context', promptTokens: p.prompt_eval_count || 0, evalTokens: p.eval_count || 0 })}\n\n`);
+      }
+    } catch {}
+  };
 
   while (true) {
     const { done, value } = await reader.read();
@@ -488,43 +521,83 @@ async function agentLoop(model, messages, sshConnections, res, depth = 0, verify
     buf += decoder.decode(value, { stream: true });
     const lines = buf.split('\n');
     buf = lines.pop();
-    for (const line of lines) {
-      if (line.trim()) {
-        try {
-          const parsed = JSON.parse(line);
-          if (parsed.message?.content) {
-            fullResponse += parsed.message.content;
-            res.write(`data: ${JSON.stringify({ type: 'text', content: parsed.message.content })}\n\n`);
-          }
-          // Los modelos de razonamiento (gemma4) separan su salida en 'thinking';
-          // ignorarla hacia que un turno entero se perdiera sin dejar rastro.
-          if (parsed.message?.thinking) {
-            fullThinking += parsed.message.thinking;
-            res.write(`data: ${JSON.stringify({ type: 'thinking', content: parsed.message.thinking })}\n\n`);
-          }
-          if (parsed.done && (parsed.prompt_eval_count || parsed.eval_count)) {
-            res.write(`data: ${JSON.stringify({ type: 'context', promptTokens: parsed.prompt_eval_count || 0, evalTokens: parsed.eval_count || 0 })}\n\n`);
-          }
-        } catch {}
-      }
+    lines.forEach(handle);
+  }
+  handle(buf);   // ultima linea sin salto final
+  return { fullResponse, fullThinking };
+}
+
+/** Moonshot (Kimi): API compatible con OpenAI, SSE con "data: {...}". */
+async function streamMoonshot(model, messages, res) {
+  let fullResponse = '', fullThinking = '';
+
+  if (!MOONSHOT_KEY) {
+    const msg = 'No hay MOONSHOT_API_KEY configurada en el servidor.';
+    res.write(`data: ${JSON.stringify({ type: 'error', text: msg })}\n\n`);
+    return { fullResponse: '', fullThinking: '', providerFailed: true };
+  }
+
+  const resp = await fetch(`${MOONSHOT_BASE}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${MOONSHOT_KEY}`,
+    },
+    body: JSON.stringify({ model, messages, stream: true, temperature: 0.3 }),
+  });
+
+  if (!resp.ok) {
+    // El cuerpo del error trae el motivo real (clave invalida, saldo, modelo inexistente)
+    const detalle = (await resp.text().catch(() => '')).slice(0, 300);
+    res.write(`data: ${JSON.stringify({ type: 'error', text: `Moonshot ${resp.status}: ${detalle}` })}\n\n`);
+    return { fullResponse: '', fullThinking: '', providerFailed: true };
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop();
+    for (const l of lines) {
+      const linea = l.trim();
+      if (!linea.startsWith('data:')) continue;
+      const data = linea.slice(5).trim();
+      if (data === '[DONE]') continue;
+      try {
+        const p = JSON.parse(data);
+        const delta = p.choices?.[0]?.delta;
+        fullResponse = emitChunk(res, fullResponse, 'text', delta?.content);
+        // Los modelos de razonamiento de Moonshot usan reasoning_content
+        fullThinking = emitChunk(res, fullThinking, 'thinking', delta?.reasoning_content);
+        if (p.usage) {
+          res.write(`data: ${JSON.stringify({ type: 'context', promptTokens: p.usage.prompt_tokens || 0, evalTokens: p.usage.completion_tokens || 0 })}\n\n`);
+        }
+      } catch {}
     }
   }
-  if (buf.trim()) {
-    try {
-      const parsed = JSON.parse(buf);
-      if (parsed.message?.content) {
-        fullResponse += parsed.message.content;
-        res.write(`data: ${JSON.stringify({ type: 'text', content: parsed.message.content })}\n\n`);
-      }
-      if (parsed.message?.thinking) {
-        fullThinking += parsed.message.thinking;
-        res.write(`data: ${JSON.stringify({ type: 'thinking', content: parsed.message.thinking })}\n\n`);
-      }
-      if (parsed.done && (parsed.prompt_eval_count || parsed.eval_count)) {
-        res.write(`data: ${JSON.stringify({ type: 'context', promptTokens: parsed.prompt_eval_count || 0, evalTokens: parsed.eval_count || 0 })}\n\n`);
-      }
-    } catch {}
+  return { fullResponse, fullThinking };
+}
+
+async function agentLoop(model, messages, sshConnections, res, depth = 0, verifyRetries = 0, emptyRetries = 0) {
+  if (depth > 10) {
+    res.write(`data: ${JSON.stringify({ type: 'text', content: '\n\n*Se alcanzó el límite de ejecuciones automáticas.*' })}\n\n`);
+    return;
   }
+
+  // El proveedor depende del modelo, pero los eventos que salen son los mismos:
+  // asi el bucle de herramientas, los clientes y el banco no notan la diferencia.
+  const { fullResponse, fullThinking, providerFailed } = isCloudModel(model)
+    ? await streamMoonshot(model, messages, res)
+    : await streamOllama(model, messages, res);
+
+  // Un rechazo del proveedor (clave invalida, saldo, modelo inexistente) no se
+  // arregla reintentando: sin esto, un 401 se repetia tres veces.
+  if (providerFailed) return;
 
   // Si el turno no dejo contenido visible, los bloques pueden haber quedado en el razonamiento
   const blockSource = fullResponse.trim() ? fullResponse : fullThinking;

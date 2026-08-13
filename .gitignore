@@ -1,3 +1,8 @@
 node_modules/
 server.log
 .claude/
+
+# Claves y ajustes locales: este repositorio es publico
+env.cmd
+.env
+titan-agent.log
