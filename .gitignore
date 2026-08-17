@@ -6,3 +6,5 @@ server.log
 env.cmd
 .env
 titan-agent.log
+users.json
+session-secret.txt

@@ -1,14 +1,53 @@
 #!/usr/bin/env node
-const TITAN_HOST = process.env.TITAN_HOST || 'http://10.0.0.6:3000';
+const TITAN_HOST = process.env.TITAN_HOST || 'http://10.0.0.21:3001';
 // Sin TITAN_MODEL se pregunta al servidor cual prefiere, en vez de fijar uno aqui:
 // si la GPU esta fuera, un nombre local cableado en el cliente falla siempre.
 const TITAN_MODEL = process.env.TITAN_MODEL || '';
+
+// El servidor exige sesion desde que se agrego el panel de usuarios (login,
+// roles administrador/usuario-l). El CLI se autentica una vez al arrancar y
+// reutiliza la cookie de sesion en todas las llamadas siguientes.
+const TITAN_USER = process.env.TITAN_USER || 'admin';
+const TITAN_PASSWORD = process.env.TITAN_PASSWORD || '';
+let sessionCookie = '';
+
+async function ensureLogin() {
+  if (sessionCookie) return;
+  if (!TITAN_PASSWORD) {
+    console.error('[CLI] Falta TITAN_PASSWORD. Ejemplo:\n' +
+                  '  TITAN_PASSWORD=xxxxx node titan-cli.js <comando> ...');
+    process.exit(1);
+  }
+  const resp = await fetch(`${TITAN_HOST}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: TITAN_USER, password: TITAN_PASSWORD }),
+  });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => '');
+    console.error(`[CLI] Login fallo (${resp.status}): ${body}`);
+    process.exit(1);
+  }
+  const setCookie = resp.headers.get('set-cookie') || '';
+  sessionCookie = setCookie.split(';')[0]; // "titan_session=<valor>"
+  if (!sessionCookie) {
+    console.error('[CLI] Login OK pero el servidor no devolvio cookie de sesion.');
+    process.exit(1);
+  }
+}
+
+/** fetch autenticado: agrega la cookie de sesion a cada llamada. */
+async function authFetch(url, opts = {}) {
+  await ensureLogin();
+  const headers = { ...(opts.headers || {}), Cookie: sessionCookie };
+  return fetch(url, { ...opts, headers });
+}
 
 /** Devuelve el modelo pedido, o el preferido del servidor si no se indico ninguno. */
 async function resolveModel(model) {
   if (model) return model;
   try {
-    const r = await fetch(`${TITAN_HOST}/api/models`);
+    const r = await authFetch(`${TITAN_HOST}/api/models`);
     const d = await r.json();
     return d.models?.[0]?.name || 'gemma4:12b';
   } catch {
@@ -139,7 +178,7 @@ async function main() {
       const { model: modelPedido, message } = parseModelAndMessage(args);
       const model = await resolveModel(modelPedido);
       if (!message) { console.error('Usage: titan-cli chat [modelo|-m modelo] <mensaje>'); process.exit(1); }
-      const resp = await fetch(`${TITAN_HOST}/api/agent`, {
+      const resp = await authFetch(`${TITAN_HOST}/api/agent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -166,7 +205,7 @@ async function main() {
       };
 
       await probe('1. servidor Titan  ', async () => {
-        const r = await fetch(`${TITAN_HOST}/api/models`);
+        const r = await authFetch(`${TITAN_HOST}/api/models`);
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return `OK (${(await r.json()).models.length} modelos)`;
       });
@@ -194,7 +233,7 @@ async function main() {
       break;
     }
     case 'models': {
-      const resp = await fetch(`${TITAN_HOST}/api/models`);
+      const resp = await authFetch(`${TITAN_HOST}/api/models`);
       const data = await resp.json();
       data.models.forEach(m => {
         console.log(`${m.name} (${m.details.parameter_size}, ${m.details.quantization_level})`);
@@ -202,7 +241,7 @@ async function main() {
       break;
     }
     case 'gpu': {
-      const resp = await fetch(`${TITAN_HOST}/api/gpu`);
+      const resp = await authFetch(`${TITAN_HOST}/api/gpu`);
       const data = await resp.json();
       console.log(`GPU: ${data.name} | Load: ${data.gpuLoad}% | VRAM: ${(data.vramUsed/1024).toFixed(1)}/${(data.vramTotal/1024).toFixed(1)}GB | Temp: ${data.temp}°C`);
       break;
@@ -211,10 +250,17 @@ async function main() {
       const host = args[0];
       const cmd = args.slice(1).join(' ');
       if (!host || !cmd) { console.error('Usage: titan-cli exec <host> <command>'); process.exit(1); }
-      const resp = await fetch(`${TITAN_HOST}/api/exec`, {
+      // TITAN_SSH_USER/TITAN_SSH_PASS: sin esto el server cae a la clave SSH por
+      // defecto, que solo sirve si ese host la tiene autorizada.
+      const resp = await authFetch(`${TITAN_HOST}/api/exec`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ host, username: 'emilio', command: cmd })
+        body: JSON.stringify({
+          host,
+          username: process.env.TITAN_SSH_USER || 'emilio',
+          password: process.env.TITAN_SSH_PASS,
+          command: cmd,
+        })
       });
       const data = await resp.json();
       if (data.error) console.error('Error:', data.error);
@@ -224,7 +270,7 @@ async function main() {
     case 'search': {
       const query = args.join(' ');
       if (!query) { console.error('Usage: titan-cli search <query>'); process.exit(1); }
-      const resp = await fetch(`${TITAN_HOST}/api/search`, {
+      const resp = await authFetch(`${TITAN_HOST}/api/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query })
@@ -237,7 +283,7 @@ async function main() {
     case 'web': {
       const url = args[0];
       if (!url) { console.error('Usage: titan-cli web <url>'); process.exit(1); }
-      const resp = await fetch(`${TITAN_HOST}/api/web`, {
+      const resp = await authFetch(`${TITAN_HOST}/api/web`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url })
@@ -247,7 +293,7 @@ async function main() {
       break;
     }
     case 'restart-ollama': {
-      const resp = await fetch(`${TITAN_HOST}/api/ollama/restart`, { method: 'POST' });
+      const resp = await authFetch(`${TITAN_HOST}/api/ollama/restart`, { method: 'POST' });
       const data = await resp.json();
       console.log(data.ok ? 'Ollama reiniciado' : `Error: ${data.error}`);
       break;
@@ -261,9 +307,9 @@ async function main() {
         { name: 'hermes', host: '10.0.0.21', port: 22, username: 'emilio' },
         // La contraseña se lee del entorno: este repo es publico.
         // Ej: TITAN_WS_PASS=xxxxx node titan-cli.js agent ...
-        { name: 'workstation', host: '10.0.0.6', port: 22, username: 'GEODRONE', password: process.env.TITAN_WS_PASS }
+        { name: 'workstation', host: '10.0.0.7', port: 22, username: 'GEODRONE', password: process.env.TITAN_WS_PASS }
       ];
-      const resp = await fetch(`${TITAN_HOST}/api/agent`, {
+      const resp = await authFetch(`${TITAN_HOST}/api/agent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model, messages: [{ role: 'user', content: message }], sshConnections })
@@ -287,7 +333,7 @@ Comandos:
   restart-ollama              Reiniciar Ollama
 
 Variables de entorno:
-  TITAN_HOST                  URL del servidor (default: http://10.0.0.6:3000)
+  TITAN_HOST                  URL del servidor (default: http://10.0.0.21:3001, RTX 3090. .6:3000 sigue vivo, pasar TITAN_HOST para usarlo)
   TITAN_MODEL                 Modelo por defecto (si no, el preferido del servidor)
   TITAN_THINKING=1            Muestra el razonamiento del modelo por stderr
   TITAN_DEBUG=1               Vuelca los eventos crudos del stream`);

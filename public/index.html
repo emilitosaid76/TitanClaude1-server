@@ -233,6 +233,10 @@
       <div class="logo">T</div>
       <h2>TITAN AGENT</h2>
     </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 16px;border-bottom:1px solid var(--border)">
+      <span id="userBadge" style="font-size:11px;color:var(--muted)"></span>
+      <button onclick="logout()" title="Cerrar sesion" style="background:none;border:1px solid var(--border);color:var(--muted);cursor:pointer;border-radius:6px;padding:2px 8px;font-size:11px" onmouseover="this.style.color='var(--danger)'" onmouseout="this.style.color='var(--muted)'">Salir</button>
+    </div>
     <div style="display:flex;gap:6px;margin:12px 16px">
       <button class="new-chat-btn" style="margin:0;flex:1" onclick="newChat()">+ CHAT</button>
       <button class="new-chat-btn" style="margin:0;flex:1;background:var(--card2);color:var(--muted);border:1px solid var(--border)" onclick="newGroup()">+ GRUPO</button>
@@ -398,6 +402,34 @@
     </div>
   </div>
 
+  <!-- Users Modal (solo administrador) -->
+  <div class="modal-overlay" id="usersModal">
+    <div class="modal">
+      <h3>Gestión de usuarios</h3>
+      <div id="usersList" style="max-height:220px;overflow-y:auto;margin-bottom:12px"></div>
+      <hr style="border-color:var(--border);margin:4px 0" />
+      <div class="form-group">
+        <label>Usuario</label>
+        <input id="newUsername" placeholder="nuevo-usuario" />
+      </div>
+      <div class="form-group">
+        <label>Contraseña</label>
+        <input id="newPassword" type="password" placeholder="Contraseña" />
+      </div>
+      <div class="form-group">
+        <label>Rol</label>
+        <select id="newRole" style="width:100%;padding:8px;background:var(--card2);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+          <option value="usuario-l">usuario-l (solo modelos locales)</option>
+          <option value="administrador">administrador (todos los modelos)</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-secondary" onclick="hideUsersModal()">Cancelar</button>
+        <button class="btn-primary" onclick="createUserSubmit()">Crear</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     // State
     let chats = JSON.parse(localStorage.getItem('titan_chats') || '[]');
@@ -408,16 +440,104 @@
     let isStreaming = false;
     let execCount = 0;
     let responseStartTime = 0;
+    let currentUser = null;
 
-    // Init
-    loadModels();
-    renderChatList();
-    renderSSHList();
-    syncSSHToServer();
-    pollGPU();
-    setInterval(pollGPU, 3000);
-    if (chats.length === 0) newChat();
-    else selectChat(chats[0].id);
+    // Init: primero valida sesion; si no hay, el propio servidor ya redirige
+    // a /login.html en la carga de '/', pero esto cubre la navegacion SPA.
+    initAuth();
+
+    async function initAuth() {
+      try {
+        const resp = await fetch('/api/me');
+        if (resp.status === 401) { location.href = '/login.html'; return; }
+        currentUser = await resp.json();
+      } catch (e) {
+        location.href = '/login.html';
+        return;
+      }
+      applyRoleUI();
+      loadModels();
+      renderChatList();
+      renderSSHList();
+      syncSSHToServer();
+      pollGPU();
+      setInterval(pollGPU, 3000);
+      if (chats.length === 0) newChat();
+      else selectChat(chats[0].id);
+    }
+
+    /** Oculta herramientas de administrador (SSH, exec, reinicio de Ollama)
+     *  para usuario-l. El backend ya las bloquea; esto es solo higiene de UI. */
+    function applyRoleUI() {
+      const badge = document.getElementById('userBadge');
+      if (badge) {
+        badge.textContent = `${currentUser.username} · ${currentUser.role}`;
+      }
+      if (currentUser.role !== 'administrador') {
+        const sshSection = document.querySelector('.ssh-section');
+        if (sshSection) sshSection.style.display = 'none';
+        const restartBtn = document.querySelector('[title="Reiniciar Ollama"]');
+        if (restartBtn) restartBtn.style.display = 'none';
+      } else if (!document.getElementById('usersBtn')) {
+        const btn = document.createElement('button');
+        btn.id = 'usersBtn';
+        btn.textContent = '+ Usuarios';
+        btn.title = 'Gestionar usuarios';
+        btn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--muted);cursor:pointer;border-radius:6px;padding:2px 8px;font-size:11px';
+        btn.onclick = showUsersModal;
+        badge.insertAdjacentElement('afterend', btn);
+      }
+    }
+
+    async function logout() {
+      await fetch('/api/logout', { method: 'POST' });
+      location.href = '/login.html';
+    }
+
+    // --- Panel de administrador: gestion de usuarios --------------------
+
+    async function showUsersModal() {
+      const resp = await fetch('/api/users');
+      const data = await resp.json();
+      const list = document.getElementById('usersList');
+      list.innerHTML = (data.users || []).map(u => `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
+          <span>${escHtml(u.username)} <span style="color:var(--muted)">· ${escHtml(u.role)}</span></span>
+          ${u.username !== currentUser.username
+            ? `<button class="btn-secondary" style="padding:2px 10px;font-size:12px" onclick="borrarUsuario('${escHtml(u.username)}')">Borrar</button>`
+            : ''}
+        </div>
+      `).join('') || '<div style="color:var(--muted);font-size:13px">Sin usuarios</div>';
+      document.getElementById('usersModal').classList.add('active');
+    }
+
+    function hideUsersModal() {
+      document.getElementById('usersModal').classList.remove('active');
+    }
+
+    async function createUserSubmit() {
+      const username = document.getElementById('newUsername').value.trim();
+      const password = document.getElementById('newPassword').value;
+      const role = document.getElementById('newRole').value;
+      const resp = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password, role }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) { alert(data.error); return; }
+      document.getElementById('newUsername').value = '';
+      document.getElementById('newPassword').value = '';
+      showUsersModal();
+    }
+
+    async function borrarUsuario(username) {
+      if (!confirm('Borrar usuario ' + username + '?')) return;
+      const resp = await fetch('/api/users/' + encodeURIComponent(username), { method: 'DELETE' });
+      const data = await resp.json();
+      if (!resp.ok) { alert(data.error); return; }
+      showUsersModal();
+    }
 
     async function loadModels() {
       try {

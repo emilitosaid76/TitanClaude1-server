@@ -1,0 +1,24 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama (local, RTX 3060)",
+      "options": {
+        "baseURL": "http://localhost:11435/v1"
+      },
+      "models": {
+        "qwen2.5-coder:14b": {
+          "name": "Qwen2.5 Coder 14B"
+        },
+        "qwen-coder-64k:latest": {
+          "name": "Qwen Coder 64k ctx"
+        },
+        "gemma4:12b": {
+          "name": "Gemma 4 12B"
+        }
+      }
+    }
+  },
+  "model": "ollama/qwen2.5-coder:14b"
+}

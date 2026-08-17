@@ -1,6 +1,6 @@
 # Despliegue de Titan Agent
 
-## Servidor Windows (10.0.0.6)
+## Servidor Windows (10.0.0.7)
 
 El servidor vive en `C:\TitanAgent\` y corre como tarea programada `TitanAgent`,
 no como proceso de terminal. Arranca al encender el equipo sin necesidad de
@@ -20,14 +20,14 @@ Copiar el archivo y matar el proceso: el vigilante lo levanta con el codigo nuev
 en menos de 5 minutos.
 
 ```bash
-scp server.js GEODRONE@10.0.0.6:C:/TitanAgent/server.js
-ssh GEODRONE@10.0.0.6 "powershell -Command \"Stop-Process -Name node -Force\""
+scp server.js GEODRONE@10.0.0.7:C:/TitanAgent/server.js
+ssh GEODRONE@10.0.0.7 "powershell -Command \"Stop-Process -Name node -Force\""
 ```
 
 Para que tome efecto de inmediato en lugar de esperar al vigilante:
 
 ```bash
-ssh GEODRONE@10.0.0.6 "powershell -Command \"Start-ScheduledTask -TaskName TitanAgent\""
+ssh GEODRONE@10.0.0.7 "powershell -Command \"Start-ScheduledTask -TaskName TitanAgent\""
 ```
 
 ### Verificar
@@ -36,7 +36,7 @@ Conviene comprobar que el codigo nuevo quedo activo **antes** de medir nada:
 una medicion contra el proceso viejo da resultados enganosos.
 
 ```bash
-curl http://10.0.0.6:3000/api/models
+curl http://10.0.0.7:3000/api/models
 ```
 
 ### Diagnostico

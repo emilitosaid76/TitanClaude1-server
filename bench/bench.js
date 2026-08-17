@@ -12,13 +12,37 @@
 //
 // WS_PASS solo hace falta para la tarea de SSH; sin el, esa tarea se omite.
 
-const HOST = process.env.TITAN_HOST || 'http://10.0.0.6:3000';
+const HOST = process.env.TITAN_HOST || 'http://10.0.0.21:3001';
 const MODEL = process.argv[2] || 'gemma4:12b';
 const RUNS = parseInt(process.argv[3], 10) || 3;
 const SOLO = process.argv[4] || null;  // id de tarea, para medir una sola
 const WS_PASS = process.env.WS_PASS;
 
-const SSH_WORKSTATION = [{ name: 'workstation', host: '10.0.0.6', port: 22, username: 'GEODRONE', password: WS_PASS }];
+// El servidor exige sesion desde que se agrego el panel de usuarios: sin esto
+// /api/agent devuelve 401 y el banco entero sale en blanco.
+const TITAN_USER = process.env.TITAN_USER || 'admin';
+const TITAN_PASSWORD = process.env.TITAN_PASSWORD || '';
+let sessionCookie = '';
+
+async function ensureLogin() {
+  if (sessionCookie) return;
+  if (!TITAN_PASSWORD) {
+    console.error('Falta TITAN_PASSWORD en el entorno. Ejemplo:\n  TITAN_PASSWORD=xxxxx node bench/bench.js gemma4:12b 3');
+    process.exit(1);
+  }
+  const resp = await fetch(`${HOST}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: TITAN_USER, password: TITAN_PASSWORD }),
+  });
+  if (!resp.ok) {
+    console.error(`Login fallo (${resp.status}): ${await resp.text().catch(() => '')}`);
+    process.exit(1);
+  }
+  sessionCookie = (resp.headers.get('set-cookie') || '').split(';')[0];
+}
+
+const SSH_WORKSTATION = [{ name: 'workstation', host: '10.0.0.7', port: 22, username: 'GEODRONE', password: WS_PASS }];
 
 // Hechos verificados a mano contra el hardware y los repositorios reales.
 const TAREAS = [
@@ -65,11 +89,12 @@ const TAREAS = [
 ];
 
 async function correr(tarea) {
+  await ensureLogin();
   const conns = tarea.requiereSsh ? SSH_WORKSTATION : [];
   const t0 = Date.now();
   const resp = await fetch(`${HOST}/api/agent`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Cookie: sessionCookie },
     body: JSON.stringify({ model: MODEL, messages: [{ role: 'user', content: tarea.prompt }], sshConnections: conns }),
   });
 

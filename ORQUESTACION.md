@@ -17,7 +17,7 @@ que Ollama no tiene: ejecutar comandos por SSH, buscar en internet y leer pagina
 Tu (agente orquestador)
     │  HTTP POST /api/agent
     ▼
-Titan Agent — http://10.0.0.6:3000
+Titan Agent — http://10.0.0.7:3000
     │  HTTP → 127.0.0.1:11434
     ▼
 Ollama → gemma4:12b sobre una RTX 3060 de 12 GB
@@ -27,7 +27,7 @@ No hay integracion especial ni SDK. Es HTTP normal: cualquier cliente capaz de
 hacer un POST y leer un stream sirve. La interfaz web y la app Android son
 exactamente eso, otros dos clientes del mismo servidor.
 
-**Punto unico de fallo:** si 10.0.0.6 esta apagado, no hay orquestacion posible.
+**Punto unico de fallo:** si 10.0.0.7 esta apagado, no hay orquestacion posible.
 Empieza siempre comprobando que responde.
 
 ---
@@ -54,7 +54,7 @@ Si falla el 2 o el 3, el servidor vive pero Ollama no responde.
 
 ## 3. La API
 
-Base: `http://10.0.0.6:3000` (configurable con `TITAN_HOST`).
+Base: `http://10.0.0.7:3000` (configurable con `TITAN_HOST`).
 
 | Endpoint | Metodo | Para que |
 |---|---|---|
@@ -69,7 +69,7 @@ Base: `http://10.0.0.6:3000` (configurable con `TITAN_HOST`).
 ### `/api/agent` — el que usaras casi siempre
 
 ```javascript
-const resp = await fetch('http://10.0.0.6:3000/api/agent', {
+const resp = await fetch('http://10.0.0.7:3000/api/agent', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
@@ -156,7 +156,7 @@ url: https://...
 ```
 
 ```exec
-host: 10.0.0.6
+host: 10.0.0.7
 command: uptime
 ```
 ````
@@ -205,7 +205,7 @@ entera de conclusiones invalidas por medir contra un proceso viejo. Comprobacion
 rapida:
 
 ```bash
-curl -s http://10.0.0.6:3000/api/models | head -c 200
+curl -s http://10.0.0.7:3000/api/models | head -c 200
 ```
 
 **Cuidado con la logica duplicada.** El bucle del agente llego a tener su propia
@@ -237,11 +237,11 @@ al cierre de la terminal y un vigilante lo revive cada 5 minutos si muere.
 
 ```bash
 # Desplegar un cambio: copiar y matar el proceso, el vigilante lo levanta
-scp server.js GEODRONE@10.0.0.6:C:/TitanAgent/server.js
-ssh GEODRONE@10.0.0.6 "powershell -Command \"Stop-Process -Name node -Force\""
+scp server.js GEODRONE@10.0.0.7:C:/TitanAgent/server.js
+ssh GEODRONE@10.0.0.7 "powershell -Command \"Stop-Process -Name node -Force\""
 
 # Sin esperar al vigilante
-ssh GEODRONE@10.0.0.6 "powershell -Command \"Start-ScheduledTask -TaskName TitanAgent\""
+ssh GEODRONE@10.0.0.7 "powershell -Command \"Start-ScheduledTask -TaskName TitanAgent\""
 ```
 
 Detalles en `deploy/README.md`.
